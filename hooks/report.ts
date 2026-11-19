@@ -19,6 +19,7 @@ export type DayLog = {
   projects: string[] // 在哪些项目里工作
   files: Record<string, number> // 改了哪些文件、各几次
   pets?: number // 摸了 Clawd 几次（每日任务用；旧账本没有这一项）
+  pomos?: number // 完成了几个番茄
 }
 
 const LOG_KEY = 'days-v1'
@@ -128,6 +129,7 @@ export function buildWeek(all: Record<string, DayLog>, now: number, offset: numb
     total.tools += log.tools
     total.edits += log.edits
     total.fails += log.fails
+    total.pomos = (total.pomos ?? 0) + (log.pomos ?? 0)
     for (const [k, v] of Object.entries(log.kinds)) total.kinds[k as ToolKind] = (total.kinds[k as ToolKind] ?? 0) + (v ?? 0)
     for (const [k, v] of Object.entries(log.failTools)) total.failTools[k] = (total.failTools[k] ?? 0) + v
     for (const p of log.projects) if (!total.projects.includes(p)) total.projects.push(p)
@@ -190,6 +192,7 @@ export function weekMarkdown(w: Week): string {
     `- 本周有 ${w.activeDays} 天在开发，和 Claude Code 完成了 ${t.turns} 轮对话，成功执行 ${t.tools} 次操作（${kinds || '无'}）`,
     t.projects.length ? `- 参与的项目：${t.projects.join('、')}` : '- 参与的项目：（填写）',
     t.edits ? `- 共修改文件 ${t.edits} 次，主要改动：${files || '（填写）'}` : '- 本周没有修改文件',
+    t.pomos ? `- 用番茄钟专注了 ${t.pomos} 个番茄（约 ${Math.round((t.pomos * 25) / 60 * 10) / 10} 小时）` : "",
     busiest && busiest.log.turns > 0 ? `- 最忙的一天：${busiest.label}（${busiest.key}），${busiest.log.turns} 轮对话` : '',
     '- （补充：具体完成了哪些功能 / 页面）',
     '',

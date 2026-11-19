@@ -46,6 +46,23 @@ export type Progress = {
   questDone: string[]
   /** 累计有几天把每日任务全部完成 */
   questFullDays: number
+  /** 🍅 番茄钟（存在存档里，所有聊天共用同一个） */
+  pomo: Pomo
+  /** 累计完成的番茄数 */
+  pomoTotal: number
+}
+
+export type Pomo = {
+  /** idle = 没在计时；focus = 专注中；break = 休息中 */
+  phase: 'idle' | 'focus' | 'break'
+  /** 这一段到这个时间点(ms)结束 */
+  endsAt: number
+  /** 这一轮已经完成几个番茄（满 4 个休息长一点，然后重新数） */
+  round: number
+  /** 开始专注时的对话轮数：结束时比它多，才算真的在干活 */
+  turnsAtStart: number
+  /** 开始前专注模式是开还是关（结束后还原） */
+  prevFocus: boolean
 }
 
 export type Prefs = {
@@ -67,6 +84,12 @@ export type Prefs = {
   size: 'small' | 'medium' | 'large'
   /** 实习开始日期 YYYY-MM-DD，周报用来算"实习第几周"；'' = 没设 */
   internStart: string
+  /** 🍅 一个番茄专注几分钟 */
+  pomoMin: number
+  /** 短休息几分钟 */
+  breakMin: number
+  /** 每 4 个番茄后的长休息几分钟 */
+  longBreakMin: number
 }
 
 /** 周报面板的状态 */
@@ -98,6 +121,8 @@ export type Pet = Progress & {
   skitUntil: number
   /** 下一次小剧场最早什么时候开始(ms) */
   nextSkitAt: number
+  /** 🍅 番茄钟还剩几分钟（只在分钟数变了才更新，免得每秒重画面板） */
+  pomoLeft: number
 }
 
 /** 图鉴面板里正在预览的东西（只是看看，不会解锁） */

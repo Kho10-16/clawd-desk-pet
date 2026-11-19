@@ -574,8 +574,18 @@ function skitLook(skit: string, g: Geom): SkitLook {
 /**
  * tempoMul = 动画时长倍数（设置里的速度 × 专注模式放慢）
  * skit     = 正在演的发呆小剧场（只在发呆时生效）
+ * pomo     = 🍅 番茄钟阶段：focus 头顶一颗小番茄；break 手里端一杯水
  */
-export function clawdSvg(mood: Mood, form: Form, isThin: boolean, tool = '', outfit?: Outfit, tempoMul = 1, skit = ''): string {
+export function clawdSvg(
+  mood: Mood,
+  form: Form,
+  isThin: boolean,
+  tool = '',
+  outfit?: Outfit,
+  tempoMul = 1,
+  skit = '',
+  pomo: 'idle' | 'focus' | 'break' = 'idle',
+): string {
   const isBaby = form === 'baby'
   const sprite = isBaby ? SPRITE_BABY : SPRITE_ADULT
   const eyeRows = sprite.map((row, y) => (row.includes('E') ? y : -1)).filter(y => y >= 0)
@@ -626,6 +636,26 @@ export function clawdSvg(mood: Mood, form: Form, isThin: boolean, tool = '', out
   }
 
   const prop = kind ? propSvg(kind, eyeTop) : { front: '', ground: '', fx: '' }
+
+  // 🍅 番茄钟
+  let pomoArt = ''
+  if (pomo === 'focus') {
+    // 头顶右边一颗小番茄（红色圆 + 绿叶子）
+    const tx = geom.right - 0.6
+    const ty = geom.headTop - 0.9
+    pomoArt =
+      `<circle cx="${tx}" cy="${ty}" r="0.95" fill="#e5484d"/>` +
+      `<circle cx="${tx - 0.3}" cy="${ty - 0.3}" r="0.25" fill="#ff9a9a"/>` + // 高光
+      px(tx - 0.5, ty - 1.15, 1, 0.35, '#4caf50') +
+      px(tx - 0.12, ty - 1.4, 0.25, 0.4, '#3a8a3e')
+  } else if (pomo === 'break' && !kind) {
+    // 休息：右手端一杯水，冒一个小泡泡
+    pomoArt =
+      px(10.8, geom.eyeTop + 1.3, 1.5, 1.9, '#d8ecff') + // 杯子
+      px(10.95, geom.eyeTop + 2.1, 1.2, 1, '#6fb3f2') + // 水
+      `<circle cx="11.5" cy="${geom.eyeTop + 0.8}" r="0.25" fill="none" stroke="#9fd3ff" stroke-width="0.12" style="animation:rise 2s infinite"/>`
+  }
+
   // 演小剧场时，平常的发呆特效（泡泡、哼小曲）先停；闪耀期的星星环绕保留
   const baseFlair = formFlair(mood, form, geom)
   const isSkit = mood === 'idle' && skit !== ''
@@ -688,6 +718,7 @@ export function clawdSvg(mood: Mood, form: Form, isThin: boolean, tool = '', out
     legB +
     `</g>` +
     wear +
+    pomoArt +
     prop.front +
     (sk.front ?? '') +
     `</g>` +

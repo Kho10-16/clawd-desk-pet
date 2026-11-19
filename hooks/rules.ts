@@ -23,6 +23,8 @@ export const COIN_TOOL = 1 // 成功调用一次工具
 export const COIN_DAILY = 10 // 每日打卡
 export const COIN_BADGE = 20 // 每解锁一枚徽章
 export const COIN_LEVEL = 10 // 升级奖励 = 新等级 × 10
+export const COIN_POMO = 15 // 完成一个番茄（期间真的有在干活）
+export const XP_POMO = 10
 
 // ---------- 🍙 商店里的吃的：用金币换饱食度 ----------
 export type Food = { id: string; name: string; price: number; food: number; say: string }
@@ -109,6 +111,7 @@ export const BADGES: Badge[] = [
   { id: 'lv20', name: '闪闪发光', hint: '达到 Lv.20', test: p => levelOf(p.xp) >= 20 },
   { id: 'pet50', name: '被宠爱的螃蟹', hint: '摸头 50 次', test: p => p.pets >= 50 },
   { id: 'quest7', name: '任务达人', hint: '累计 7 天完成全部每日任务', test: p => p.questFullDays >= 7 },
+  { id: 'pomo25', name: '番茄达人', hint: '累计完成 25 个番茄', test: p => p.pomoTotal >= 25 },
 ]
 
 // ---------- 🎭 发呆小剧场 ----------
@@ -183,6 +186,8 @@ export const emptyProgress: Progress = {
   questDay: '',
   questDone: [],
   questFullDays: 0,
+  pomo: { phase: 'idle', endsAt: 0, round: 0, turnsAtStart: 0, prevFocus: false },
+  pomoTotal: 0,
   prefs: {
     focus: false,
     sound: true,
@@ -193,6 +198,9 @@ export const emptyProgress: Progress = {
     showText: true,
     size: 'medium',
     internStart: '',
+    pomoMin: 25,
+    breakMin: 5,
+    longBreakMin: 15,
   },
 }
 

@@ -1,7 +1,7 @@
 ﻿import { atom, read, update } from 'claude-code'
 import type { Register, EngineInterface } from 'claude-code'
 
-import type { Dex, Mood, Pet, Prefs, Progress, Slot, WeekView } from '../types'
+import type { Dex, Mood, Pet, Pomo, Prefs, Progress, Slot, WeekView } from '../types'
 import { buildWeek, loadDays, loadToday, logProject, logToday, logTool, top, weekMarkdown } from './report'
 import { ALL_DONE_COINS, ALL_DONE_MARK, ALL_DONE_XP, questsFor } from './quests'
 import { ABOVE, LINES, MOOD_LABEL, clawdSvg, clawdText } from './art'
@@ -10,6 +10,7 @@ import {
   COIN_BADGE,
   COIN_DAILY,
   COIN_LEVEL,
+  COIN_POMO,
   COIN_TOOL,
   COIN_TURN,
   FOODS,
@@ -29,6 +30,7 @@ import {
   STREAK_DOUBLE_AT,
   XP_DAILY,
   XP_EDIT,
+  XP_POMO,
   XP_TOOL,
   XP_TURN,
   dayKey,
@@ -62,11 +64,12 @@ const initial: Pet = {
   skit: '',
   skitUntil: 0,
   nextSkitAt: 0,
+  pomoLeft: 0,
 }
 
 // shape 换成 pet-5：加了小剧场字段、拿掉了 frame，旧结构作废
 const pet = atom({ plugin: 'desk-pet', key: 'pet' } as const, initial, {
-  shape: 'pet-5',
+  shape: 'pet-6',
 })
 
 // 动画帧单独放：只有终端文字版会读它。
@@ -145,6 +148,9 @@ function cleanPrefs(x: Partial<Prefs>): Partial<Prefs> {
     longTaskSec: num(x.longTaskSec, [10, 30, 60, 120], d.longTaskSec),
     sleepMin: num(x.sleepMin, [0, 1, 2, 5, 10], d.sleepMin),
     internStart: typeof x.internStart === 'string' && /^(\d{4}-\d{2}-\d{2})?$/.test(x.internStart) ? x.internStart : d.internStart,
+    pomoMin: num(x.pomoMin, [15, 25, 30, 45, 50], d.pomoMin),
+    breakMin: num(x.breakMin, [3, 5, 10], d.breakMin),
+    longBreakMin: num(x.longBreakMin, [10, 15, 20, 30], d.longBreakMin),
   }
 }
 
@@ -213,6 +219,7 @@ async function loadProgress($: EngineInterface): Promise<Progress> {
     ...saved,
     outfit: { ...emptyProgress.outfit, ...saved?.outfit },
     prefs: { ...emptyProgress.prefs, ...saved?.prefs },
+    pomo: { ...emptyProgress.pomo, ...saved?.pomo },
   }
 }
 
@@ -467,6 +474,91 @@ function chooseSkit(form: Form): Skit {
 }
 
 // =====================================================================
+// 🍅 番茄钟：专注 → 休息 → 专注……（存在存档里，所有聊天共用同一个）
+// =====================================================================
+
+const POMO_IDLE: Pomo = { phase: 'idle', endsAt: 0, round: 0, turnsAtStart: 0, prevFocus: false }
+
+/** 开始一个番茄：25 分钟专注，自动打开专注模式 */
+async function startPomo($: EngineInterface) {
+  const now = await $.clock.now()
+  await commit($, s => ({
+    ...s,
+    pomo: {
+      phase: 'focus',
+      endsAt: now + s.prefs.pomoMin * 60000,
+      round: s.pomo.round,
+      turnsAtStart: s.turns,
+      // 如果是从休息直接开下一个，保留最初的专注模式开关
+      prevFocus: s.pomo.phase === 'idle' ? s.prefs.focus : s.pomo.prevFocus,
+    },
+    prefs: { ...s.prefs, focus: true },
+  }))
+  const { prefs } = await loadProgress($)
+  await setMood($, 'happy', { holdMs: 4000, say: `🍅 开始专注 ${prefs.pomoMin} 分钟！我会安静陪着你` })
+}
+
+/** 停掉番茄钟，专注模式还原成开始前的样子 */
+async function stopPomo($: EngineInterface, say = '番茄钟停下来了') {
+  await commit($, s => ({ ...s, pomo: { ...POMO_IDLE }, prefs: { ...s.prefs, focus: s.pomo.prevFocus } }))
+  await setMood($, 'idle', { say })
+}
+
+/**
+ * 时间到了：专注 → 休息，或者 休息 → 结束。
+ * 几个聊天同时开着时，只有第一个发现"时间到"的聊天会真的切换（其他的看到 endsAt 变了就不动）。
+ */
+async function finishPomoPhase($: EngineInterface, expectedEndsAt: number) {
+  const now = await $.clock.now()
+  let what = 'none' as 'none' | 'focusDone' | 'breakDone' // 用 as：TS 看不出它会在下面的函数里被改
+  let earned = false
+  let breakMin = 0
+  let isLong = false
+
+  await commit(
+    $,
+    s => {
+      if (s.pomo.phase === 'idle' || s.pomo.endsAt !== expectedEndsAt) return s // 别的聊天已经处理过了
+      if (s.pomo.phase === 'focus') {
+        what = 'focusDone'
+        earned = s.turns > s.pomo.turnsAtStart // 这段时间真的有和 Claude 完成对话
+        const round = s.pomo.round + 1
+        isLong = round % 4 === 0
+        breakMin = isLong ? s.prefs.longBreakMin : s.prefs.breakMin
+        return {
+          ...s,
+          coins: s.coins + (earned ? COIN_POMO : 0),
+          xp: s.xp + (earned ? XP_POMO : 0),
+          pomoTotal: s.pomoTotal + (earned ? 1 : 0),
+          pomo: { ...s.pomo, phase: 'break', endsAt: now + breakMin * 60000, round: isLong ? 0 : round },
+        }
+      }
+      // 休息结束
+      what = 'breakDone'
+      return { ...s, pomo: { ...POMO_IDLE, round: s.pomo.round }, prefs: { ...s.prefs, focus: s.pomo.prevFocus } }
+    },
+    { isUse: true },
+  )
+
+  const { prefs } = await loadProgress($)
+  if (what === 'focusDone') {
+    if (earned) await logToday($, d => {
+      d.pomos = (d.pomos ?? 0) + 1
+    })
+    const msg = earned
+      ? `🍅 番茄完成！+${COIN_POMO}💰 +${XP_POMO} XP。${isLong ? '连续 4 个了，' : ''}休息 ${breakMin} 分钟，喝口水、站起来走走吧`
+      : `🍅 时间到！这段时间没有完成对话，就不发奖励啦。休息 ${breakMin} 分钟吧`
+    $.ui.toast(`Clawd：${msg}`) // 番茄钟的提醒就算在专注模式也要弹
+    await setMood($, 'happy', { holdMs: 8000, say: msg })
+    if (prefs.sound) void playSound($, 'achievement')
+  } else if (what === 'breakDone') {
+    $.ui.toast('Clawd：☕ 休息结束！要开始下一个番茄吗？（/clawd-pomo）')
+    await setMood($, 'happy', { holdMs: 8000, say: '☕ 休息结束！准备好开始下一个番茄了吗？' })
+    if (prefs.sound) void playSound($, 'nudge')
+  }
+}
+
+// =====================================================================
 // 📅 每日任务：每次小账本记了一笔，就看看今天的任务有没有新完成的
 // =====================================================================
 
@@ -554,6 +646,7 @@ export const register: Register = on => {
     await $.command.register({ name: 'clawd-dex', description: '打开 Clawd 图鉴：预览所有形态、动作和装扮' })
     await $.command.register({ name: 'clawd-week', description: '打开 Clawd 周报：本周统计 + 一键生成周报草稿' })
     await $.command.register({ name: 'clawd-settings', description: '弹出 Clawd 设置窗口（Windows）' })
+    await $.command.register({ name: 'clawd-pomo', description: '🍅 开始 / 停止番茄钟' })
     void $.ui.open({ id: PANE, title: TITLE })
 
     // 心跳：每 0.7 秒检查一次心情过期、肚子饿、睡觉、要不要演小剧场；约每 7 秒从存档同步一次
@@ -599,6 +692,11 @@ export const register: Register = on => {
         }
       }
 
+      // 🍅 番茄钟：时间到了就切换；剩余分钟数变了才更新（每分钟重画一次就够）
+      if (p.pomo.phase !== 'idle' && t >= p.pomo.endsAt) await finishPomoPhase($, p.pomo.endsAt)
+      const pomoLeft = p.pomo.phase === 'idle' ? 0 : Math.max(1, Math.ceil((p.pomo.endsAt - t) / 60000))
+      if (pomoLeft !== p.pomoLeft) await update($, pet, q => ({ ...q, pomoLeft }))
+
       // 真的有变化才写，免得面板每 0.7 秒重画一次
       const changed =
         mood !== p.mood || moodUntil !== p.moodUntil || say !== p.say ||
@@ -622,6 +720,17 @@ export const register: Register = on => {
   on('command.run', { command: 'clawd-dex' }, async $ => {
     await $.ui.open({ id: DEX_PANE, title: 'Clawd 图鉴' })
     return { text: '📖 图鉴打开啦：随便看，不会解锁哦' }
+  })
+
+  // /clawd-pomo：没在计时 → 开始；休息中 → 直接开下一个；专注中 → 停止
+  on('command.run', { command: 'clawd-pomo' }, async $ => {
+    const { pomo, prefs } = await loadProgress($)
+    if (pomo.phase === 'focus') {
+      await stopPomo($)
+      return { text: '🍅 番茄钟停止了（这个番茄不算完成）' }
+    }
+    await startPomo($)
+    return { text: `🍅 开始专注 ${prefs.pomoMin} 分钟！再输入一次 /clawd-pomo 可以停止` }
   })
 
   on('command.run', { command: 'clawd-settings' }, async $ => {
@@ -746,7 +855,7 @@ export const register: Register = on => {
         <Text>💬 {p.say}</Text>
         <Text> </Text>
         {Svg ? (
-          <Svg source={clawdSvg(p.mood, form, isHungry, p.tool, p.outfit, tempoOf(p.prefs), p.skit)} alt="Clawd" width={120} height={104} />
+          <Svg source={clawdSvg(p.mood, form, isHungry, p.tool, p.outfit, tempoOf(p.prefs), p.skit, p.pomo.phase)} alt="Clawd" width={120} height={104} />
         ) : (
           <Box flexDirection="column">
             <Text mono color="claude">{ABOVE[p.mood][frame % 2] || ' '}</Text>
@@ -777,6 +886,39 @@ export const register: Register = on => {
           金币 <Text color="warning">💰 {p.coins}</Text>
         </Text>
         <Text dimColor>下一形态：{FORM_NEXT[form]}</Text>
+        <Text> </Text>
+
+        {/* ===================== 🍅 番茄钟 ===================== */}
+        <Text weight="bold">
+          🍅 番茄钟{' '}
+          {p.pomo.phase === 'focus' ? (
+            <Text color="error">专注中 · 还剩 {p.pomoLeft} 分钟</Text>
+          ) : p.pomo.phase === 'break' ? (
+            <Text color="success">休息中 · 还剩 {p.pomoLeft} 分钟</Text>
+          ) : (
+            <Text dimColor>没在计时</Text>
+          )}
+        </Text>
+        <Text dimColor>
+          这一轮 {'🍅'.repeat(p.pomo.round)}{'⚪'.repeat(Math.max(0, 4 - p.pomo.round))}（满 4 个长休息）· 累计完成 {p.pomoTotal} 个
+        </Text>
+        <Box flexDirection="row" gap={1}>
+          {p.pomo.phase === 'focus' ? (
+            <Button key="pomo-stop" label="⏹ 停止" hotkey="t" onPress={() => stopPomo($)} />
+          ) : (
+            <Button
+              key="pomo-start"
+              label={p.pomo.phase === 'break' ? '▶ 不休息了，开始下一个' : `▶ 开始专注 ${p.prefs.pomoMin} 分钟`}
+              hotkey="t"
+              variant="primary"
+              onPress={() => startPomo($)}
+            />
+          )}
+          {p.pomo.phase === 'break' ? (
+            <Button key="pomo-end" label="结束番茄钟" onPress={() => stopPomo($, '今天辛苦啦～')} />
+          ) : null}
+        </Box>
+        <Text dimColor>专注期间真的和 Claude 完成过对话，才算完成番茄：+{COIN_POMO}💰 +{XP_POMO} XP</Text>
         <Text> </Text>
 
         {/* ===================== 📅 今日任务 ===================== */}
@@ -1142,8 +1284,13 @@ export const register: Register = on => {
 
     return (
       <Box flexDirection="row" justifyContent="flex-end" alignItems="flex-end" gap={1}>
-        {/* 专注模式：不说话，只留一个小小的 🤫 */}
-        {p.prefs.focus ? (
+        {/* 番茄钟计时中：只显示剩余时间（就算在专注模式也要看得到） */}
+        {p.pomo.phase !== 'idle' ? (
+          <Text size="caption" color={p.pomo.phase === 'focus' ? 'error' : 'success'}>
+            {p.pomo.phase === 'focus' ? '🍅' : '☕'} {p.pomoLeft} 分
+          </Text>
+        ) : p.prefs.focus ? (
+          /* 专注模式：不说话，只留一个小小的 🤫 */
           <Text size="caption" dimColor>🤫</Text>
         ) : !p.prefs.showText ? null : (
           <Box flexDirection="column" alignItems="flex-end">
@@ -1160,7 +1307,7 @@ export const register: Register = on => {
           </Box>
         )}
         {Svg ? (
-          <Svg source={clawdSvg(p.mood, formOf(lv), isHungry, p.tool, p.outfit, tempoOf(p.prefs), p.skit)} alt="Clawd" width={SIZE_PX[p.prefs.size]} height={Math.round((SIZE_PX[p.prefs.size] * 13) / 15)} />
+          <Svg source={clawdSvg(p.mood, formOf(lv), isHungry, p.tool, p.outfit, tempoOf(p.prefs), p.skit, p.pomo.phase)} alt="Clawd" width={SIZE_PX[p.prefs.size]} height={Math.round((SIZE_PX[p.prefs.size] * 13) / 15)} />
         ) : (
           <Box flexDirection="column">
             <Text mono color="claude">{row1}</Text>

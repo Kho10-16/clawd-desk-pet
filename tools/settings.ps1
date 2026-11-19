@@ -28,6 +28,7 @@ if ($null -eq $cur) { $cur = [pscustomobject]@{} }
 $defaults = [ordered]@{
   focus = $false; sound = $true; volume = 'mid'; longTaskSec = 30; sleepMin = 2
   speed = 'normal'; showText = $true; size = 'medium'; internStart = ''
+  pomoMin = 25; breakMin = 5; longBreakMin = 15
 }
 function Get-Pref($name) {
   if ($cur.PSObject.Properties.Name -contains $name) { return $cur.$name }
@@ -40,6 +41,9 @@ $longOpts   = @(@('10 秒', 10), @('30 秒', 30), @('1 分钟', 60), @('2 分钟
 $sleepOpts  = @(@('1 分钟', 1), @('2 分钟', 2), @('5 分钟', 5), @('10 分钟', 10), @('永远不睡', 0))
 $speedOpts  = @(@('慢', 'slow'), @('正常', 'normal'), @('快', 'fast'))
 $sizeOpts   = @(@('小', 'small'), @('中', 'medium'), @('大', 'large'))
+$pomoOpts   = @(@('15 分钟', 15), @('25 分钟', 25), @('30 分钟', 30), @('45 分钟', 45), @('50 分钟', 50))
+$breakOpts  = @(@('3 分钟', 3), @('5 分钟', 5), @('10 分钟', 10))
+$longOpts2  = @(@('10 分钟', 10), @('15 分钟', 15), @('20 分钟', 20), @('30 分钟', 30))
 
 # ---------- 2. 画窗口 ----------
 $font = New-Object Drawing.Font('Microsoft YaHei UI', 10)
@@ -143,6 +147,11 @@ $speed = Add-Combo '动画速度' $speedOpts (Get-Pref 'speed')
 $size  = Add-Combo '聊天框上方的大小' $sizeOpts (Get-Pref 'size')
 $sleep = Add-Combo '多久没动静就睡觉' $sleepOpts (Get-Pref 'sleepMin')
 
+Add-Title '🍅 番茄钟'
+$pomoMin  = Add-Combo '一个番茄专注' $pomoOpts (Get-Pref 'pomoMin')
+$breakMin = Add-Combo '短休息' $breakOpts (Get-Pref 'breakMin')
+$longMin  = Add-Combo '每 4 个番茄后长休息' $longOpts2 (Get-Pref 'longBreakMin')
+
 Add-Title '📋 周报'
 $lblIntern = New-Object Windows.Forms.Label
 $lblIntern.Text = '实习开始日期'
@@ -205,6 +214,9 @@ $reset.Add_Click({
   Set-Combo $speed $defaults.speed
   Set-Combo $size $defaults.size
   Set-Combo $sleep $defaults.sleepMin
+  Set-Combo $pomoMin $defaults.pomoMin
+  Set-Combo $breakMin $defaults.breakMin
+  Set-Combo $longMin $defaults.longBreakMin
   $intern.Text = ''
 })
 
@@ -225,6 +237,9 @@ $save.Add_Click({
     showText    = $showText.Checked
     size        = Get-ComboValue $size
     internStart = $d
+    pomoMin     = [int](Get-ComboValue $pomoMin)
+    breakMin    = [int](Get-ComboValue $breakMin)
+    longBreakMin = [int](Get-ComboValue $longMin)
   }
   $form.Close()
 })
