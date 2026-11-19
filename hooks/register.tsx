@@ -80,6 +80,73 @@ const weekView = atom(
   { shape: 'week-1' },
 )
 
+// =====================================================================
+// ⚙️ 设置窗口：在 Claude 外面弹一个 Windows 原生窗口（tools/settings.ps1）
+//   像传纸条：现在的设置从 stdin 递进去 → 你在窗口里改 → 保存时窗口印出
+//   一行 CLAWD_SETTINGS:{...} → Clawd 读到就存档，所有聊天同步
+// =====================================================================
+
+let settingsOpen = false // 同一时间只开一个窗口
+
+/** 返回 true = 窗口已弹出（不等你关掉窗口） */
+async function openSettingsWindow($: EngineInterface): Promise<boolean> {
+  if (settingsOpen) {
+    $.ui.toast('Clawd：设置窗口已经开着啦（可能在别的窗口后面）')
+    return true
+  }
+  const { platform } = await $.session.info()
+  if (platform !== 'windows') {
+    $.ui.toast('Clawd：设置窗口目前只支持 Windows')
+    return false
+  }
+  settingsOpen = true
+  const root = $.plugin.root.replace(/\//g, '\\')
+  const current = (await loadProgress($)).prefs
+
+  // 在后台等窗口关掉：窗口开多久都没关系，不会卡住 Claude
+  void (async () => {
+    let out = ''
+    try {
+      const child = $.process.spawn({
+        argv: ['powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-STA', '-File', `${root}\\tools\\settings.ps1`, '-Root', root],
+        input: JSON.stringify(current),
+      })
+      for await (const piece of child) {
+        if (piece.stream === 'stdout') out += piece.text
+      }
+      const line = out.split(/\r?\n/).find(l => l.startsWith('CLAWD_SETTINGS:'))
+      if (!line) return // 按了取消 / 关掉窗口
+      const next = cleanPrefs(JSON.parse(line.slice('CLAWD_SETTINGS:'.length)) as Partial<Prefs>)
+      await commit($, s => ({ ...s, prefs: { ...s.prefs, ...next } }))
+      await setMood($, 'happy', { holdMs: 3000, say: '设置已保存 ✨' })
+    } catch {
+      $.ui.toast('Clawd：设置窗口出了点问题，设置没有改')
+    } finally {
+      settingsOpen = false
+    }
+  })()
+  return true
+}
+
+/** 只收下认得的、合法的值（窗口那边就算传来奇怪的东西也不会弄坏存档） */
+function cleanPrefs(x: Partial<Prefs>): Partial<Prefs> {
+  const d = emptyProgress.prefs
+  const pickOne = <T extends string>(v: unknown, ok: readonly T[], fallback: T): T =>
+    typeof v === 'string' && (ok as readonly string[]).includes(v) ? (v as T) : fallback
+  const num = (v: unknown, ok: number[], fallback: number) => (typeof v === 'number' && ok.includes(v) ? v : fallback)
+  return {
+    focus: typeof x.focus === 'boolean' ? x.focus : d.focus,
+    sound: typeof x.sound === 'boolean' ? x.sound : d.sound,
+    showText: typeof x.showText === 'boolean' ? x.showText : d.showText,
+    volume: pickOne(x.volume, ['low', 'mid', 'high'] as const, d.volume),
+    speed: pickOne(x.speed, ['slow', 'normal', 'fast'] as const, d.speed),
+    size: pickOne(x.size, ['small', 'medium', 'large'] as const, d.size),
+    longTaskSec: num(x.longTaskSec, [10, 30, 60, 120], d.longTaskSec),
+    sleepMin: num(x.sleepMin, [0, 1, 2, 5, 10], d.sleepMin),
+    internStart: typeof x.internStart === 'string' && /^(\d{4}-\d{2}-\d{2})?$/.test(x.internStart) ? x.internStart : d.internStart,
+  }
+}
+
 /** Windows：用 PowerShell 把文字放进剪贴板（文字从 stdin 传进去，不会被当成命令） */
 async function copyToClipboard($: EngineInterface, text: string): Promise<boolean> {
   try {
@@ -416,6 +483,7 @@ export const register: Register = on => {
     await $.command.register({ name: 'clawd-focus', description: '开关 Clawd 的专注模式' })
     await $.command.register({ name: 'clawd-dex', description: '打开 Clawd 图鉴：预览所有形态、动作和装扮' })
     await $.command.register({ name: 'clawd-week', description: '打开 Clawd 周报：本周统计 + 一键生成周报草稿' })
+    await $.command.register({ name: 'clawd-settings', description: '弹出 Clawd 设置窗口（Windows）' })
     void $.ui.open({ id: PANE, title: TITLE })
 
     // 心跳：每 0.7 秒检查一次心情过期、肚子饿、睡觉、要不要演小剧场；约每 7 秒从存档同步一次
@@ -484,6 +552,11 @@ export const register: Register = on => {
   on('command.run', { command: 'clawd-dex' }, async $ => {
     await $.ui.open({ id: DEX_PANE, title: 'Clawd 图鉴' })
     return { text: '📖 图鉴打开啦：随便看，不会解锁哦' }
+  })
+
+  on('command.run', { command: 'clawd-settings' }, async $ => {
+    const opened = await openSettingsWindow($)
+    return { text: opened ? '⚙️ 正在打开设置窗口……（会弹在屏幕中间；如果几秒后还没出现，告诉我）' : '设置窗口没能打开' }
   })
 
   on('command.run', { command: 'clawd-week' }, async $ => {
@@ -572,9 +645,6 @@ export const register: Register = on => {
 
     const wear = (slot: Slot, id: string) =>
       commit($, s => ({ ...s, outfit: { ...s.outfit, [slot]: id } }))
-    /** 改一项设置：在存档里最新的设置上改，所有聊天同步 */
-    const setPref = (change: Partial<Prefs>) =>
-      commit($, s => ({ ...s, prefs: { ...s.prefs, ...change } }))
 
     return (
       <Box flexDirection="column">
@@ -649,95 +719,13 @@ export const register: Register = on => {
         </Box>
         <Text> </Text>
 
-        {/* ===================== ⚙️ 设置 ===================== */}
-        <Text weight="bold">⚙️ 设置</Text>
-        <Box flexDirection="row" flexWrap="wrap" gap={1}>
-          <Button
-            key="focus"
-            label={p.prefs.focus ? '🤫 专注模式：开' : '专注模式：关'}
-            hotkey="z"
-            onPress={() => setPref({ focus: !p.prefs.focus })}
-          />
-          <Button
-            key="sound"
-            label={p.prefs.sound ? '🔔 提示音：开' : '🔕 提示音：关'}
-            hotkey="s"
-            onPress={() => setPref({ sound: !p.prefs.sound })}
-          />
-          <Button
-            key="show-text"
-            label={p.prefs.showText ? '💬 右上角文字：开' : '右上角文字：关'}
-            onPress={() => setPref({ showText: !p.prefs.showText })}
-          />
+        {/* ===================== ⚙️ 设置：全部在弹出的 Windows 窗口里改 ===================== */}
+        <Box flexDirection="row" gap={1} alignItems="center">
+          <Button key="open-settings" label="⚙️ 打开设置窗口" hotkey="s" onPress={() => void openSettingsWindow($)} />
+          <Text dimColor>
+            {p.prefs.focus ? '🤫 专注中' : '🦀 普通'} · {p.prefs.sound ? '🔔 有声' : '🔕 静音'}
+          </Text>
         </Box>
-        <Select
-          key="volume"
-          label="🔊 音量"
-          value={p.prefs.volume}
-          options={[
-            { value: 'low', label: '低' },
-            { value: 'mid', label: '中' },
-            { value: 'high', label: '高' },
-          ]}
-          onSelect={v => setPref({ volume: v as Prefs['volume'] })}
-        />
-        <Box flexDirection="row" gap={1}>
-          <Button key="try-ach" label="▶ 试听成就音" onPress={() => playSound($, 'achievement')} />
-          <Button key="try-done" label="▶ 试听完成音" onPress={() => playSound($, 'done')} />
-        </Box>
-        <Select
-          key="long-task"
-          label="⏱ 完成音触发：任务超过"
-          value={String(p.prefs.longTaskSec)}
-          options={[
-            { value: '10', label: '10 秒' },
-            { value: '30', label: '30 秒' },
-            { value: '60', label: '1 分钟' },
-            { value: '120', label: '2 分钟' },
-          ]}
-          onSelect={v => setPref({ longTaskSec: Number(v) })}
-        />
-        <Select
-          key="sleep"
-          label="😴 多久没动静就睡觉"
-          value={String(p.prefs.sleepMin)}
-          options={[
-            { value: '1', label: '1 分钟' },
-            { value: '2', label: '2 分钟' },
-            { value: '5', label: '5 分钟' },
-            { value: '10', label: '10 分钟' },
-            { value: '0', label: '永远不睡' },
-          ]}
-          onSelect={v => setPref({ sleepMin: Number(v) })}
-        />
-        <Select
-          key="speed"
-          label="🎞 动画速度"
-          value={p.prefs.speed}
-          options={[
-            { value: 'slow', label: '慢' },
-            { value: 'normal', label: '正常' },
-            { value: 'fast', label: '快' },
-          ]}
-          onSelect={v => setPref({ speed: v as Prefs['speed'] })}
-        />
-        <Select
-          key="size"
-          label="📏 聊天框上方 Clawd 大小"
-          value={p.prefs.size}
-          options={[
-            { value: 'small', label: '小' },
-            { value: 'medium', label: '中' },
-            { value: 'large', label: '大' },
-          ]}
-          onSelect={v => setPref({ size: v as Prefs['size'] })}
-        />
-        <Button
-          key="reset-prefs"
-          label="↺ 恢复默认设置"
-          onPress={() => commit($, s => ({ ...s, prefs: { ...emptyProgress.prefs } }))}
-        />
-        <Text dimColor>专注模式：不说话、不弹提示、动画再慢一倍 · 设置会同步到所有聊天</Text>
         <Text> </Text>
 
         {/* ===================== 🛒 商店 ===================== */}
@@ -825,7 +813,7 @@ export const register: Register = on => {
 
   // ---------- 📋 周报面板：一周统计 + 生成周报草稿 ----------
   on('ui.render', { component: 'Pane', requestId: WEEK_PANE }, async ($, e) => {
-    const { Box, Text, Button, Select, Input } = $.ui.resolve(e)
+    const { Box, Text, Button, Select } = $.ui.resolve(e)
     const v = await read($, weekView) // 只订阅周报自己的状态，不会被心跳打扰
     const now = await $.clock.now()
     const prog = await loadProgress($)
@@ -913,23 +901,11 @@ export const register: Register = on => {
         </Box>
         <Text> </Text>
 
-        <Text weight="bold">⚙️ 实习开始日期</Text>
-        <Text dimColor>设了之后，标题会显示"实习第 X 周"。现在：{prog.prefs.internStart || '没设'}</Text>
-        <Input
-          key="intern-start"
-          placeholder="例如 2026-10-06"
-          value={prog.prefs.internStart}
-          submitLabel="保存"
-          onSubmit={async x => {
-            const s = x.trim()
-            if (s !== '' && !/^\d{4}-\d{2}-\d{2}$/.test(s)) {
-              await setNote('❌ 日期格式要像 2026-10-06')
-              return
-            }
-            await commit($, p => ({ ...p, prefs: { ...p.prefs, internStart: s } }))
-            await update($, weekView, z => ({ ...z, refresh: z.refresh + 1, note: s ? '✅ 实习开始日期已保存' : '✅ 已清除' }))
-          }}
-        />
+        <Box flexDirection="row" gap={1} alignItems="center">
+          <Text dimColor>实习开始日期：{prog.prefs.internStart || '没设'}</Text>
+          <Button key="week-settings" label="⚙️ 去设置窗口改" onPress={() => void openSettingsWindow($)} />
+        </Box>
+        <Text dimColor>设了之后标题会显示"实习第 X 周"；改完按「↻ 刷新」</Text>
       </Box>
     )
   })
