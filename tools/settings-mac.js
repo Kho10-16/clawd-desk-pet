@@ -19,6 +19,7 @@ const DEFAULTS = {
   speed: 'normal', showText: true, size: 'medium', internStart: '',
   pomoMin: 25, breakMin: 5, longBreakMin: 15,
   nightFrom: 23, nightRemindMin: 30,
+  island: true, // 灵动岛目前只有 Windows 版，这里只是原样带回去
 }
 
 // 下拉选单的选项：[显示的字, 存起来的值]

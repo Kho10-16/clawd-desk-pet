@@ -401,7 +401,7 @@ $defaults = [ordered]@{
   focus = $false; sound = $true; volume = 'mid'; longTaskSec = 30; sleepMin = 2
   speed = 'normal'; showText = $true; size = 'medium'; internStart = ''
   pomoMin = 25; breakMin = 5; longBreakMin = 15
-  nightFrom = 23; nightRemindMin = 30
+  nightFrom = 23; nightRemindMin = 30; island = $true
 }
 function Get-Pref($name) {
   if ($cur.PSObject.Properties.Name -contains $name) { return $cur.$name }
@@ -470,6 +470,7 @@ $pgFocus = New-Page '专注与打扰' '专注与打扰' ([string][char]0xE7ED) 8
 $c = $pgFocus.AddCard()
 $focus    = New-Toggle (Get-Pref 'focus');    $c.AddRow('专注模式', '不说话、不弹提示、动画放慢', $focus)
 $showText = New-Toggle (Get-Pref 'showText'); $c.AddRow('聊天框上方显示文字', '关掉之后只剩 Clawd 自己', $showText)
+$islandT = New-Toggle (Get-Pref 'island'); $c.AddRow('桌面灵动岛', '屏幕顶部的小黑岛：心情、番茄钟倒计时', $islandT)
 $pgFocus.AddNote('专注模式也可以用 /clawd-focus 快速开关。')
 
 $pgSound = New-Page '提示音' '提示音' ([string][char]0xE767) 255 45 85
@@ -542,6 +543,7 @@ $reset.Location = New-Object Drawing.Point(($sideW + $GUT), $btnY)
 $reset.Add_Click({
   $focus.Checked = $defaults.focus
   $showText.Checked = $defaults.showText
+  $islandT.Checked = $defaults.island
   $sound.Checked = $defaults.sound
   Set-Combo $volume $defaults.volume
   Set-Combo $long $defaults.longTaskSec
@@ -572,6 +574,7 @@ $doSave = {
     sleepMin    = [int](Get-ComboValue $sleep)
     speed       = Get-ComboValue $speed
     showText    = $showText.Checked
+    island      = $islandT.Checked
     size        = Get-ComboValue $size
     internStart = $d
     pomoMin     = [int](Get-ComboValue $pomoMin)

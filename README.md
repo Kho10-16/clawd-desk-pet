@@ -7,6 +7,9 @@ Clawd watches what Claude is doing and reacts: it types on a tiny keyboard when 
 
 ## ✨ Features 功能
 
+- **Clawd hub Clawd 中心** 🫧：a Liquid Glass window outside Claude (`/clawd-hub`) with everything in one place: home, daily quests, pomodoro, shop, wardrobe, badges, gallery, weekly report and settings. Buttons work live; changes sync to every chat
+- **Desktop Dynamic Island 桌面灵动岛** ⚫：a black pill at the top of your screen showing Clawd, its mood and the pomodoro countdown. Click to expand it for controls; it pops open on its own when Claude is waiting for you
+
 - **Tool-specific actions 工具专属动作**：Bash ⌨️ / Read 📖 / Edit 🔨 / WebSearch 🔭 / TodoWrite 📋, plus smoke and a red ✗ when a tool fails
 - **Raising game 养成系统**：XP, levels and coins are earned **only by actually using Claude Code**（对话、工具调用、改文件、每日打卡）
 - **4 growth forms 四个形态**：宝宝期 → 成长期 → 绅士期 → 闪耀期, each with its own idle, action and mood animations
@@ -45,14 +48,17 @@ In the **Claude desktop app** (where `/plugin` does not run): click **+** next t
 
 | Command | What it does |
 |---|---|
-| `/pet` | Open Clawd's panel: stats, wardrobe, shop, badges 打开养成面板 |
+| `/clawd-hub` | Open the Clawd hub window 打开 Clawd 中心 |
+| `/pet` | Open Clawd's panel inside Claude: stats, wardrobe, shop, badges 打开养成面板 |
 | `/clawd-settings` | Open the settings window (a native Windows dialog, outside Claude) 弹出设置窗口 |
 | `/clawd-dex` | Open the gallery 打开图鉴 |
 | `/clawd-week` | Open the weekly report helper 打开周报 |
 | `/clawd-focus` | Toggle focus mode 开关专注模式 |
 | `/clawd-pomo` | Start / stop the pomodoro timer 开始或停止番茄钟 |
 
-Panel hotkeys: `p` pat · `f` snack · `w` wake · `d` gallery · `r` weekly report · `s` settings window · `t` pomodoro
+Panel hotkeys: `p` pat · `f` snack · `w` wake · `d` gallery · `r` weekly report · `s` settings window · `t` pomodoro · `h` Clawd hub
+
+The Dynamic Island starts by itself; turn it off under 专注与打扰 in settings, or right-click it → 隐藏灵动岛.
 
 ## 🛠 Customize 自己改
 
@@ -65,11 +71,14 @@ Panel hotkeys: `p` pat · `f` snack · `w` wake · `d` gallery · `r` weekly rep
 | `hooks/quests.ts` | Daily quest pool 每日任务池 |
 | `tools/settings.ps1` | The Windows settings window 设置窗口 (Windows) |
 | `tools/settings-mac.js` | The macOS settings window 设置窗口 (macOS) |
+| `tools/hub.ps1` + `tools/hub/index.html` | The Clawd hub: a tiny local server and the Liquid Glass page Clawd 中心 |
+| `tools/island.ps1` | The desktop Dynamic Island 桌面灵动岛 |
 | `tools/make-sounds.mjs` | Synthesizes the original sound effects — run `node tools/make-sounds.mjs` 合成原创音效 |
 
 ## 📝 Notes
 
 - The settings window works on Windows (`tools/settings.ps1`) and macOS (`tools/settings-mac.js`, a native Cocoa window run by the built-in `osascript`). The macOS version is new and has not been tested on a real Mac yet; feedback welcome.
+- The Clawd hub and the Dynamic Island are Windows-only for now. The hub opens in Microsoft Edge's app mode with its own profile, served only on `127.0.0.1` with a random per-launch token.
 - Sounds play through PowerShell on Windows (Claude Code's own audio player is silent there) and through Claude Code elsewhere.
 - Clawd's look is inspired by the Claude Code mascot; this is an unofficial fan project, not affiliated with Anthropic.
 - The weekly report data stays on your computer. Saved reports go to `reports/`, which is git-ignored.

@@ -165,6 +165,7 @@ function cleanPrefs(x: Partial<Prefs>): Partial<Prefs> {
     longBreakMin: num(x.longBreakMin, [10, 15, 20, 30], d.longBreakMin),
     nightFrom: num(x.nightFrom, [0, 21, 22, 23, 24], d.nightFrom),
     nightRemindMin: num(x.nightRemindMin, [0, 15, 30, 60], d.nightRemindMin),
+    island: typeof x.island === 'boolean' ? x.island : d.island,
   }
 }
 
@@ -890,8 +891,14 @@ async function hubAction($: EngineInterface, a: HubAction) {
       if (snd) void playSound($, snd)
       break
     }
+    case 'island-off':
+      await commit($, x => ({ ...x, prefs: { ...x.prefs, island: false } }))
+      await stopIsland($)
+      $.ui.toast('Clawd：灵动岛藏起来了（设置里可以再打开）')
+      break
     case 'open':
-      if (a.what === 'settings') void openSettingsWindow($)
+      if (a.what === 'hub') void openHub($)
+      else if (a.what === 'settings') void openSettingsWindow($)
       else if (a.what === 'dex') await $.ui.open({ id: DEX_PANE, title: 'Clawd 图鉴' })
       else if (a.what === 'week') {
         await update($, weekView, w => ({ ...w, refresh: w.refresh + 1, note: '' }))
@@ -967,6 +974,102 @@ async function openHub($: EngineInterface): Promise<'opened' | 'reopened' | 'uns
 }
 
 // =====================================================================
+// ⚫ 桌面灵动岛：屏幕顶部的小黑岛（tools/island.ps1）
+//   Clawd → 岛：一小份状态写进 island-state.json（变了才写）
+//   岛 → Clawd：按钮印 CLAWD_ACTION:{...}，和 Clawd 中心用同一个 hubAction()
+//   好几个聊天同时开着：岛那边有一把锁，只有第一个能开；其他的每 2 分钟再试一次
+// =====================================================================
+
+let islandRunning = false
+let islandPath = ''
+let islandLast = ''
+let islandTriedAt = 0
+let islandChild: ReturnType<EngineInterface['process']['spawn']> | null = null
+
+async function writeIslandState($: EngineInterface, extra: Record<string, unknown> = {}) {
+  if (islandPath === '') return
+  const p = await read($, pet)
+  const now = await $.clock.now()
+  const lv = levelOf(p.xp)
+  const body = JSON.stringify({
+    mood: p.mood,
+    moodLabel: MOOD_LABEL[p.mood],
+    say: p.say,
+    lv,
+    form: formOf(lv),
+    pomo: {
+      phase: p.pomo.phase,
+      endsAt: p.pomo.endsAt,
+      wholeMs: (p.pomo.phase === 'break' ? (p.pomo.round === 0 ? p.prefs.longBreakMin : p.prefs.breakMin) : p.prefs.pomoMin) * 60000,
+    },
+    ...extra,
+  })
+  if (body === islandLast) return
+  islandLast = body
+  await $.fs.write(islandPath, `{"now":${now},${body.slice(1)}`)
+}
+
+async function startIsland($: EngineInterface) {
+  if (islandRunning) return
+  islandTriedAt = await $.clock.now()
+  const { platform } = await $.session.info()
+  if (platform !== 'windows') return
+  const data = (await $.process.hookEnv()).CLAUDE_PLUGIN_DATA ?? ''
+  if (data === '') return
+  islandPath = `${data}${data.includes('\\') ? '\\' : '/'}island-state.json`
+  islandLast = ''
+  islandRunning = true
+  await writeIslandState($)
+  const root = $.plugin.root.replace(/\//g, '\\')
+  void (async () => {
+    let buf = ''
+    try {
+      const child = $.process.spawn({
+        argv: ['powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-STA', '-File', `${root}\\tools\\island.ps1`, '-State', islandPath],
+      })
+      islandChild = child
+      for await (const piece of child) {
+        if (piece.stream !== 'stdout') continue
+        buf += piece.text
+        let nl = buf.indexOf('\n')
+        while (nl >= 0) {
+          const line = buf.slice(0, nl).trim()
+          buf = buf.slice(nl + 1)
+          if (line === 'CLAWD_ISLAND_BUSY') break // 别的聊天已经开了一颗
+          if (line.startsWith('CLAWD_ACTION:')) {
+            try {
+              await hubAction($, JSON.parse(line.slice('CLAWD_ACTION:'.length)) as HubAction)
+            } catch {
+              // 看不懂的传话就当没听到
+            }
+          }
+          nl = buf.indexOf('\n')
+        }
+      }
+    } catch {
+      // 岛关掉了 / 没开成：心跳过一阵会再试
+    } finally {
+      islandRunning = false
+      islandChild = null
+    }
+  })()
+}
+
+async function stopIsland($: EngineInterface) {
+  if (!islandRunning) return
+  try {
+    await writeIslandState($, { quit: true }) // 先请它自己关
+  } catch {
+    // 写不进去也没关系，下面直接结束它
+  }
+  try {
+    void islandChild?.return(undefined as never)
+  } catch {
+    // 已经关了
+  }
+}
+
+// =====================================================================
 // 👋 等你回复：Claude 问你问题、或者等你批准权限时，Clawd 举牌子 + 叮咚一声
 // =====================================================================
 
@@ -1010,6 +1113,7 @@ export const register: Register = on => {
 
     // 心跳：每 0.7 秒检查一次心情过期、肚子饿、睡觉、要不要演小剧场；约每 7 秒从存档同步一次
     let ticks = 0
+    let lastWantIsland = true
     $.clock.every(700, async () => {
       ticks++
       await update($, frameAtom, f => (f + 1) % 1000) // 只有终端文字版读它
@@ -1091,6 +1195,13 @@ export const register: Register = on => {
 
       // 🫧 Clawd 中心开着的话，把最新状态写给它（没变就不写）
       if (hubOpen) await writeHubState($)
+
+      // ⚫ 灵动岛：设置开着就保持它活着（别的聊天开了的话，2 分钟后再试）；关了就收起来
+      const wantIsland = p.prefs.island
+      if (wantIsland && !islandRunning && (islandTriedAt === 0 || t - islandTriedAt > 120000 || !lastWantIsland)) await startIsland($)
+      else if (!wantIsland && islandRunning) await stopIsland($)
+      lastWantIsland = wantIsland
+      if (islandRunning) await writeIslandState($)
     })
 
     return next(e)

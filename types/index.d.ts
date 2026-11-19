@@ -96,6 +96,8 @@ export type Prefs = {
   nightFrom: number
   /** 🌙 夜里每隔几分钟提醒一次去睡觉，0 = 不提醒 */
   nightRemindMin: number
+  /** ⚫ 桌面灵动岛：屏幕顶部的小黑岛（Windows） */
+  island: boolean
 }
 
 /** 周报面板的状态 */

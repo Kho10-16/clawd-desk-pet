@@ -219,6 +219,7 @@ export const emptyProgress: Progress = {
     longBreakMin: 15,
     nightFrom: 23,
     nightRemindMin: 30,
+    island: true,
   },
 }
 
