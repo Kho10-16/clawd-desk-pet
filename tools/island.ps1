@@ -57,7 +57,7 @@ namespace ClawdIsland {
     protected override bool ShowWithoutActivation { get { return true; } }
 
     // ---------- 状态（PowerShell 那边读文件后填进来） ----------
-    public string Mood = "idle", MoodLabel = "发呆", Say = "", Phase = "idle", Kind = "adult";
+    public string Mood = "idle", MoodLabel = "发呆", Say = "", Phase = "idle", Kind = "adult", Task = "";
     public int Lv = 1;
     public long EndsAt = 0, Skew = 0;       // 番茄钟结束时间（Clawd 的时钟）、两边时钟差
     public int WholeMs = 25 * 60000;        // 这一段一共多久（画圆圈用）
@@ -155,7 +155,7 @@ namespace ClawdIsland {
 
     string Title() {
       if (Mood == "waiting") return "Claude 在等你回复";
-      if (Phase == "focus") return "专注中";
+      if (Phase == "focus") return Task.Length > 0 ? "专注中 · " + Task : "专注中";
       if (Phase == "break") return "休息一下";
       return "Lv." + Lv + " · " + MoodLabel;
     }
@@ -303,6 +303,7 @@ function Read-State {
   $island.Mood = [string]$s.mood
   $island.MoodLabel = [string]$s.moodLabel
   $island.Say = [string]$s.say
+  $island.Task = [string]$s.task
   $island.Lv = [int]$s.lv
   $island.Kind = if ($s.form -eq 'baby') { 'baby' } else { 'adult' }
   $island.Phase = [string]$s.pomo.phase

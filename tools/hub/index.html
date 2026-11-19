@@ -167,6 +167,51 @@
   .wbars .today { color: var(--claude); font-weight: 700; }
   .md { white-space: pre-wrap; font: 12.5px/1.65 ui-monospace, "Cascadia Code", Consolas, "Microsoft YaHei UI", monospace; max-height: 340px; overflow: auto; user-select: text; padding: 16px 20px; }
 
+  /* 番茄统计 */
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .vbars { display: grid; align-items: end; gap: 6px; height: 150px; padding-top: 10px; }
+  .vbars div { display: flex; flex-direction: column; align-items: center; justify-content: flex-end; gap: 5px; height: 100%; font-size: 11px; color: var(--ink2); }
+  .vbars i { width: 100%; max-width: 30px; border-radius: 8px 8px 4px 4px; background: linear-gradient(180deg, #ff9a8f, #ff5e52); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .6); transition: height .5s; }
+  .vbars.hours { grid-template-columns: repeat(24, 1fr); gap: 2px; height: 110px; }
+  .vbars.hours i { border-radius: 3px; background: linear-gradient(180deg, #ffc28a, var(--claude)); }
+  .hrow { display: grid; grid-template-columns: 110px 1fr 56px; gap: 10px; align-items: center; font-size: 12px; margin: 8px 0; }
+  .hrow .bar i { background: linear-gradient(90deg, #ffb38f, var(--claude)); }
+  .hrow em { font-style: normal; color: var(--ink2); text-align: right; }
+  .hrow span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .heat { display: grid; grid-template-rows: repeat(7, 14px); grid-auto-flow: column; grid-auto-columns: 14px; gap: 4px; }
+  .heat i { border-radius: 4px; background: rgba(0, 0, 0, .06); }
+  .heat i.l1 { background: #ffd2c4; } .heat i.l2 { background: #ff9f86; } .heat i.l3 { background: #f2694f; } .heat i.l4 { background: #c9452f; }
+  .heat i.fut { background: transparent; }
+  .heat i.today { outline: 2px solid var(--blue); outline-offset: 1px; }
+  .legend { display: flex; gap: 4px; align-items: center; font-size: 11px; color: var(--ink2); margin-top: 10px; }
+  .legend i { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+  .hist { display: grid; grid-template-columns: 96px 1fr 60px 76px; gap: 10px; align-items: center; padding: 10px 0; border-bottom: 1px solid rgba(0, 0, 0, .06); font-size: 13px; }
+  .hist:last-child { border-bottom: 0; }
+  .hist .t { color: var(--ink2); font-variant-numeric: tabular-nums; }
+  .hist .ok { color: #1f9d48; font-weight: 600; text-align: right; }
+  .hist .no { color: var(--ink3); text-align: right; }
+
+  /* 任务清单 */
+  .add { display: grid; grid-template-columns: 1fr auto auto; gap: 12px; align-items: center; padding: 14px 16px; }
+  .add input { border: 0; background: transparent; font: inherit; font-size: 15px; color: var(--ink); outline: none; padding: 6px 4px; user-select: text; }
+  .est { display: flex; gap: 2px; }
+  .est button { all: unset; cursor: pointer; font-size: 16px; filter: grayscale(1) opacity(.35); transition: filter .15s, transform .15s; }
+  .est button.on { filter: none; }
+  .est button:hover { transform: scale(1.2); }
+  .task { display: grid; grid-template-columns: 30px 1fr auto auto auto; gap: 12px; align-items: center; padding: 12px 16px; margin-bottom: 10px; }
+  .task.cur { box-shadow: inset 0 0 0 2px rgba(255, 94, 82, .55), 0 14px 40px rgba(80, 40, 20, .12); }
+  .check { width: 24px; height: 24px; border-radius: 50%; border: 2px solid rgba(0, 0, 0, .25); cursor: pointer; display: grid; place-items: center; font-size: 13px; color: #fff; transition: .2s; }
+  .check:hover { border-color: var(--green); }
+  .task.done .check { background: var(--green); border-color: var(--green); }
+  .task .ttl { cursor: pointer; min-width: 0; }
+  .task .ttl b { display: block; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .task .ttl small { font-size: 12px; color: var(--ink2); }
+  .task.done .ttl b { text-decoration: line-through; color: var(--ink3); }
+  .icon { all: unset; cursor: pointer; width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; font-size: 14px; transition: background .2s; }
+  .icon:hover { background: rgba(0, 0, 0, .06); }
+  .pickrow { display: flex; align-items: center; gap: 10px; margin-top: 14px; font-size: 13px; }
+  .pickrow .pick { max-width: 260px; }
+
   .toast { position: fixed; left: 50%; bottom: 26px; transform: translate(-50%, 30px); opacity: 0; z-index: 9; padding: 10px 18px; font-size: 13px; transition: .35s cubic-bezier(.3, 1.4, .5, 1); }
   .toast.on { transform: translate(-50%, 0); opacity: 1; }
   .offline { position: fixed; inset: 0; z-index: 20; display: none; place-items: center; background: rgba(246, 236, 230, .6); backdrop-filter: blur(8px); font-size: 15px; color: var(--ink2); text-align: center; }
@@ -196,13 +241,14 @@ const pct = (a, b) => (b > 0 ? Math.max(0, Math.min(100, Math.round((a / b) * 10
 
 // 页面：[id, 名字, 图标, 颜色]；out = 在 Claude 里打开（第 2 步会搬进来）
 const PAGES = [
-  ['home', '首页', '🦀', '#ff9f7a'], ['quests', '每日任务', '📅', '#ffcf5c'], ['pomo', '番茄钟', '🍅', '#ff7b72'],
+  ['home', '首页', '🦀', '#ff9f7a'], ['quests', '每日任务', '📅', '#ffcf5c'], ['pomo', '番茄钟', '🍅', '#ff7b72'], ['tasks', '任务清单', '📝', '#7fd4c1'],
   ['shop', '商店', '🛍️', '#7cc6ff'], ['wardrobe', '衣柜', '👗', '#c9a6ff'], ['badges', '徽章', '🏅', '#ffd66b'],
   ['dex', '图鉴', '📖', '#8be0b0'], ['week', '周报', '📋', '#9fb7ff'], ['settings', '设置', '⚙️', '#c7c7cc'],
 ]
 const SEP_BEFORE = 'dex' // 从这一页开始，前面画一条分隔线
 
 let S = null          // 最新状态
+let newEst = 1        // 新任务预计几个番茄
 let skew = 0          // Clawd 的时钟 - 这边的时钟
 let current = 'home'
 const sigs = {}       // 每一页上次画的时候用的数据（没变就不重画）
@@ -286,24 +332,101 @@ const VIEWS = {
       </div>`,
   },
   pomo: {
-    sig: s => [s.pomo.phase, s.pomo.round, s.pomo.today, s.pomo.pomoMin, s.pomo.breakMin, s.pomo.total],
+    sig: s => [s.pomo.phase, s.pomo.round, s.pomo.pomoMin, s.pomo.breakMin, s.pomoStats, s.tasks],
     html: s => {
       const ph = s.pomo.phase
       const color = ph === 'break' ? 'var(--green)' : '#ff6b5e'
-      return `
+      const st = s.pomoStats
+      const active = s.tasks.list.filter(t => !t.done)
+      const running = s.tasks.list.find(t => t.id === s.tasks.running)
+      const cur = active.find(t => t.id === s.tasks.current)
+      const hm = m => (m >= 60 ? `${Math.floor(m / 60)} 小时 ${m % 60} 分` : `${m} 分钟`)
+      const pick = `<div class="pickrow">正在做
+        <select class="pick" data-task-pick>${['<option value="">（不指定任务）</option>', ...active.map(t => `<option value="${esc(t.id)}" ${t.id === s.tasks.current ? 'selected' : ''}>${esc(t.title)}</option>`)].join('')}</select>
+        <button class="btn tiny" data-go="tasks">管理任务</button></div>`
+      let out = `
       <h1>番茄钟</h1>
       <div class="glass card" style="display:grid;grid-template-columns:220px 1fr;gap:28px;align-items:center;padding:28px">
         <div class="clock" id="clock" style="background:conic-gradient(${color} 0%,rgba(0,0,0,.07) 0)"><div><div><b id="clock-t">${s.pomo.pomoMin}:00</b><span class="muted">${ph === 'focus' ? `专注中 · 第 ${s.pomo.round + 1} 个` : ph === 'break' ? '休息一下 ☕' : '准备好了吗？'}</span></div></div></div>
         <div>
-          <b style="font-size:20px">${ph === 'focus' ? '保持专注 🍅' : ph === 'break' ? '喝口水，伸个懒腰' : '开始一个番茄'}</b>
-          <p class="muted">${s.pomo.pomoMin} 分钟专注 → ${s.pomo.breakMin} 分钟休息，每 4 个番茄长休息一次。期间完成过对话，就有 +15 💰 +10 XP。专注时 Clawd 会自动进入专注模式。</p>
+          <b style="font-size:20px">${ph === 'focus' ? (running ? esc(running.title) : '保持专注 🍅') : ph === 'break' ? '喝口水，伸个懒腰' : cur ? '下一个：' + esc(cur.title) : '开始一个番茄'}</b>
+          <p class="muted">${s.pomo.pomoMin} 分钟专注 → ${s.pomo.breakMin} 分钟休息，每 4 个番茄长休息一次。期间完成过对话，就有 +15 💰 +10 XP。</p>
           <div class="pills">${ph === 'focus' ? '<button class="btn red" data-act="pomo-stop">⏹ 停止这个番茄</button>'
             : ph === 'break' ? '<button class="btn blue" data-act="pomo-start">▶ 直接开下一个</button><button class="btn" data-act="pomo-end">结束番茄钟</button>'
             : '<button class="btn blue" data-act="pomo-start">▶ 开始专注</button>'}</div>
-          <h2 style="margin-left:0">今天完成 ${s.pomo.today} 个 · 累计 ${s.pomo.total} 个</h2>
-          <div style="font-size:26px;letter-spacing:4px">${'🍅'.repeat(Math.min(s.pomo.today, 12)) || '<span class="muted" style="font-size:13px;letter-spacing:0">还没有番茄</span>'}</div>
+          ${ph === 'focus' ? '' : pick}
         </div>
       </div>`
+      if (!st) return out + '<div class="muted" style="margin:16px 6px">统计加载中…</div>'
+      const maxW = Math.max(1, ...st.week.map(d => d.focusMin))
+      const maxH = Math.max(1, ...st.hours)
+      const best = st.hours.indexOf(Math.max(...st.hours))
+      const maxT = Math.max(1, ...st.taskShare.map(x => x.min))
+      const lvl = n => (n === 0 ? '' : n <= 2 ? 'l1' : n <= 4 ? 'l2' : n <= 7 ? 'l3' : 'l4')
+      const today = st.calendar.find(c => !c.future && st.calendar.indexOf(c) === st.calendar.filter(x => !x.future).length - 1)?.key
+      const when = ms => { const d = new Date(ms); return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}` }
+      out += `
+      <h2>今天</h2>
+      <div class="kpis" style="margin-top:0">
+        <div class="glass kpi"><b>${st.today.pomos}</b><span>🍅 完成番茄${st.today.stopped ? ` · 中途停 ${st.today.stopped}` : ''}</span></div>
+        <div class="glass kpi"><b>${hm(st.today.focusMin)}</b><span>⏱ 专注时长</span></div>
+        <div class="glass kpi"><b>${st.today.tasksDone}</b><span>✅ 完成任务</span></div>
+        <div class="glass kpi"><b>${st.streak} 天</b><span>🔥 连续专注</span></div>
+      </div>
+      <h2>最近 7 天 · 专注 ${hm(st.weekFocusMin)}</h2>
+      <div class="glass card">
+        <div class="vbars" style="grid-template-columns:repeat(7,1fr)">${st.week.map(d => `<div title="${d.pomos} 个番茄 · ${d.focusMin} 分钟"><span>${d.focusMin ? d.focusMin + '分' : ''}</span><i style="height:${Math.round((d.focusMin / maxW) * 110) + 3}px;${d.focusMin ? '' : 'opacity:.2'}"></i>${d.label}</div>`).join('')}</div>
+      </div>
+      <div class="two" style="margin-top:14px">
+        <div class="glass card">
+          <div class="muted">什么时候最专注（最近 30 天）${st.hours.some(h => h > 0) ? ` · 最常在 <b>${best}:00</b>` : ''}</div>
+          <div class="vbars hours">${st.hours.map((h, i) => `<div title="${i}:00 · ${h} 个番茄"><i style="height:${Math.round((h / maxH) * 80) + 2}px;${h ? '' : 'opacity:.2'}"></i>${i % 6 === 0 ? i : ''}</div>`).join('')}</div>
+        </div>
+        <div class="glass card">
+          <div class="muted">时间花在哪（最近 7 天）</div>
+          ${st.taskShare.length ? st.taskShare.map(x => `<div class="hrow"><span title="${esc(x.title)}">${esc(x.title)}</span><div class="bar"><i style="width:${Math.round((x.min / maxT) * 100)}%"></i></div><em>${x.min} 分</em></div>`).join('') : '<div class="muted" style="margin-top:12px">还没有记录。先在「任务清单」加个任务，再开始番茄吧</div>'}
+        </div>
+      </div>
+      <h2>专注日历 · 最近 12 周</h2>
+      <div class="glass card">
+        <div class="heat">${st.calendar.map(c => `<i class="${c.future ? 'fut' : lvl(c.pomos)} ${c.key === today ? 'today' : ''}" title="${c.key} · ${c.pomos} 个番茄"></i>`).join('')}</div>
+        <div class="legend">少 <i style="background:rgba(0,0,0,.06)"></i><i style="background:#ffd2c4"></i><i style="background:#ff9f86"></i><i style="background:#f2694f"></i><i style="background:#c9452f"></i> 多 · 累计 ${st.total.pomos} 个番茄、${hm(st.total.focusMin)}</div>
+      </div>
+      <h2>番茄记录</h2>
+      <div class="glass card" style="padding:6px 20px">
+        ${st.history.length ? st.history.map(r => `<div class="hist"><span class="t">${when(r.start)}</span><span>${r.task ? esc(r.task) : '<span class="muted">（没指定任务）</span>'}</span><span class="t">${r.min} 分钟</span>${r.done ? '<span class="ok">✓ 完成</span>' : '<span class="no">中途停止</span>'}</div>`).join('') : '<div class="muted" style="padding:12px 0">还没有番茄记录。开始第一个吧！</div>'}
+      </div>`
+      return out
+    },
+  },
+  tasks: {
+    sig: s => [s.tasks, s.pomo.phase],
+    html: s => {
+      const active = s.tasks.list.filter(t => !t.done)
+      const done = s.tasks.list.filter(t => t.done).sort((a, b) => b.doneAt - a.doneAt)
+      const toms = t => {
+        const n = Math.max(t.estimate, t.pomos)
+        return Array.from({ length: n }, (_, i) => (i < t.pomos ? (i < t.estimate ? '🍅' : '🔴') : '○')).join('')
+      }
+      const row = t => `
+        <div class="glass task ${t.done ? 'done' : ''} ${t.id === s.tasks.current && !t.done ? 'cur' : ''}">
+          <div class="check" data-task-done="${esc(t.id)}" title="${t.done ? '改回没完成' : '完成'}">${t.done ? '✓' : ''}</div>
+          <div class="ttl" data-task-pickrow="${esc(t.id)}" title="设成正在做"><b>${esc(t.title)}</b>
+            <small>${toms(t)} ${t.pomos}/${t.estimate} 个番茄${t.focusMin ? ` · 专注 ${t.focusMin} 分钟` : ''}</small></div>
+          ${t.id === s.tasks.current && !t.done ? '<span class="chip">正在做</span>' : '<span></span>'}
+          ${t.done ? '<span></span>' : s.pomo.phase === 'focus' ? '<span></span>' : `<button class="icon" data-act="pomo-start" data-id="${esc(t.id)}" title="开始一个番茄">▶</button>`}
+          <button class="icon" data-task-del="${esc(t.id)}" title="删除">🗑</button>
+        </div>`
+      return `
+      <h1>任务清单</h1>
+      <div class="glass add">
+        <input id="task-title" data-keep maxlength="60" placeholder="要做什么？例如：做周报截图" autocomplete="off">
+        <div class="est" title="预计几个番茄">${Array.from({ length: 8 }, (_, i) => `<button data-est="${i + 1}" class="${i < newEst ? 'on' : ''}">🍅</button>`).join('')}</div>
+        <button class="btn blue" data-task-add>添加</button>
+      </div>
+      <div class="muted" style="margin:8px 6px 18px">点 🍅 选预计要几个番茄；点任务名设成"正在做"，开始番茄时就会记在它身上。🔴 = 超出预计的番茄</div>
+      ${active.length ? active.map(row).join('') : '<div class="glass card muted">还没有任务。加一个吧！</div>'}
+      ${done.length ? `<h2>已完成（最近 7 天）</h2>${done.map(row).join('')}` : ''}`
     },
   },
   shop: {
@@ -455,7 +578,11 @@ function render(force = false) {
   if (force || sigs[current] !== sig) {
     sigs[current] = sig
     const main = $('#main'), top = main.scrollTop
+    const keep = document.activeElement?.matches?.('[data-keep]') ? { id: document.activeElement.id, v: document.activeElement.value, pos: document.activeElement.selectionStart } : null
+    const typed = $('#task-title')?.value ?? ''
     $('#p-' + current).innerHTML = VIEWS[current].html(S)
+    if ($('#task-title')) $('#task-title').value = typed
+    if (keep && document.getElementById(keep.id)) { const k = document.getElementById(keep.id); k.focus(); k.setSelectionRange(keep.pos, keep.pos) }
     main.scrollTop = top
   }
   if (S.note && S.note.id !== render.noteId) {
@@ -496,9 +623,18 @@ document.addEventListener('change', e => {
   const t = e.target
   if (t.dataset.pref) return setPref(t.dataset.pref, t.dataset.kind === 'num' ? Number(t.value) : t.value)
   if (t.dataset.dexAct !== undefined) return act('dex', { act: t.value })
+  if (t.dataset.taskPick !== undefined) return act('task-pick', { id: t.value })
   if (t.dataset.dexSlot) return act('dex', { slot: t.dataset.dexSlot, id: t.value })
 })
 document.addEventListener('click', async e => {
+  const tk = e.target.closest('[data-task-done],[data-task-del],[data-task-pickrow],[data-task-add],[data-est]')
+  if (tk) {
+    if (tk.dataset.est) { newEst = Number(tk.dataset.est); document.querySelectorAll('.est button').forEach((b, i) => b.classList.toggle('on', i < newEst)); return }
+    if (tk.dataset.taskAdd !== undefined) return addTask()
+    if (tk.dataset.taskDone) return act('task-done', { id: tk.dataset.taskDone })
+    if (tk.dataset.taskPickrow) return act('task-pick', { id: tk.dataset.taskPickrow })
+    if (tk.dataset.taskDel) { if (confirm('删除这个任务？（番茄记录会保留）')) act('task-del', { id: tk.dataset.taskDel }); return }
+  }
   const x = e.target.closest('[data-pref],[data-dex-form],[data-dex-what],[data-week],[data-week-copy],[data-clear-intern]')
   if (x) {
     if (x.dataset.kind === 'bool') return setPref(x.dataset.pref, !S.prefs[x.dataset.pref])
@@ -526,6 +662,16 @@ document.addEventListener('click', async e => {
   }
   act(a, { id: b.dataset.id, slot: b.dataset.slot })
 })
+
+function addTask() {
+  const input = $('#task-title')
+  const title = (input?.value ?? '').trim()
+  if (!title) { input?.focus(); return toast('先写下要做什么') }
+  act('task-add', { title, estimate: newEst })
+  input.value = ''; newEst = 1
+  toast('📝 已添加：' + title)
+}
+document.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.id === 'task-title') addTask() })
 
 // ---------- 每 0.6 秒问一次柜台 ----------
 let lastText = '', fails = 0

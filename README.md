@@ -22,6 +22,7 @@ Clawd watches what Claude is doing and reacts: it types on a tiny keyboard when 
 - **"Waiting for you" nudge 等你回复提醒**：when Claude asks you a question or needs permission, Clawd holds up a ! ? sign and plays a soft ding-dong
 - **Daily quests 每日任务**：3 small goals a day (e.g. finish 5 turns, edit 3 files), plus a bonus for clearing all three
 - **Pomodoro timer 番茄钟** 🍅：focus 25 min → break 5 min, with a long break every 4 rounds. Clawd wears a tomato while you focus and holds a cup of water on breaks
+- **Pomodoro records & task list 番茄记录和任务清单** 📝 (inspired by Focus To-Do)：every pomodoro is logged, finished or stopped early. Add tasks with an estimated number of pomodoros, pick what you're working on, and see stats in the hub: today, the last 7 days, your best time of day, time per task, a 12-week focus calendar and the full history
 - **Night mode 夜间模式** 🌙：from 11pm (configurable) Clawd puts on a nightcap and pajamas, slows down, and gently reminds you to sleep. It only does this if you're still working, and never during focus mode or a pomodoro
 - **Settings window 设置窗口**：a macOS-style native window (sidebar, toggles, pop-up menus) for sound, size, speed, sleep timer, pomodoro lengths, night mode and more
 - **Gallery 图鉴**：preview every form, action, skit and accessory
@@ -73,6 +74,7 @@ The Dynamic Island starts by itself; turn it off under 专注与打扰 in settin
 | `hooks/register.tsx` | Claude Code events and the panels 事件和面板 |
 | `hooks/report.ts` | Daily log and weekly report 小账本和周报 |
 | `hooks/quests.ts` | Daily quest pool 每日任务池 |
+| `hooks/pomo.ts` | Pomodoro log, task list and stats 番茄日记、任务清单、统计 |
 | `tools/settings.ps1` | The Windows settings window 设置窗口 (Windows) |
 | `tools/settings-mac.js` | The macOS settings window 设置窗口 (macOS) |
 | `tools/hub.ps1` + `tools/hub/index.html` | The Clawd hub: a tiny local server and the Liquid Glass page Clawd 中心 |

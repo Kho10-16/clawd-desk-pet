@@ -4,6 +4,8 @@ import type { Register, EngineInterface } from 'claude-code'
 import type { Dex, Mood, Pet, Pomo, Prefs, Progress, Slot, WeekView } from '../types'
 import { buildWeek, loadDays, loadToday, logProject, logToday, logTool, top, weekMarkdown } from './report'
 import { ALL_DONE_COINS, ALL_DONE_MARK, ALL_DONE_XP, questsFor } from './quests'
+import { addPomoRecord, loadPomoLog, loadTasks, newTaskId, pomoStats, updateTasks } from './pomo'
+import type { PomoRecord, TaskBook } from './pomo'
 import { ABOVE, LINES, MOOD_LABEL, clawdSvg, clawdText, svgShapes } from './art'
 import {
   BADGES,
@@ -69,9 +71,9 @@ const initial: Pet = {
   pomoLeft: 0,
 }
 
-// shape 换成 pet-7：存档里加了 nightNagAt（夜间提醒），旧结构作废
+// shape 换成 pet-8：番茄钟加了 startedAt / taskId（番茄日记），旧结构作废
 const pet = atom({ plugin: 'desk-pet', key: 'pet' } as const, initial, {
-  shape: 'pet-7',
+  shape: 'pet-8',
 })
 
 // 动画帧单独放：只有终端文字版会读它。
@@ -531,11 +533,31 @@ async function claimNightNag($: EngineInterface, now: number): Promise<boolean> 
 // 🍅 番茄钟：专注 → 休息 → 专注……（存在存档里，所有聊天共用同一个）
 // =====================================================================
 
-const POMO_IDLE: Pomo = { phase: 'idle', endsAt: 0, round: 0, turnsAtStart: 0, prevFocus: false }
+const POMO_IDLE: Pomo = { phase: 'idle', endsAt: 0, round: 0, turnsAtStart: 0, prevFocus: false, startedAt: 0, taskId: '' }
 
-/** 开始一个番茄：25 分钟专注，自动打开专注模式 */
-async function startPomo($: EngineInterface) {
+/** 📝 任务清单的小抄（心跳每 7 秒从存档更新一次；改任务时马上更新） */
+let taskBook: TaskBook = { list: [], current: '' }
+function taskTitle(id: string): string {
+  return taskBook.list.find(t => t.id === id)?.title ?? ''
+}
+
+/** 🍅 记进番茄日记，顺便给任务记上"用了几个番茄、专注多久" */
+async function recordPomo($: EngineInterface, r: PomoRecord) {
+  await addPomoRecord($, r)
+  if (r.taskId) {
+    taskBook = await updateTasks($, b => ({
+      ...b,
+      list: b.list.map(t => (t.id === r.taskId ? { ...t, pomos: t.pomos + (r.done ? 1 : 0), focusMs: t.focusMs + (r.end - r.start) } : t)),
+    }))
+  }
+}
+
+/** 开始一个番茄：25 分钟专注，自动打开专注模式。taskId 给了就顺便把它设成"正在做" */
+async function startPomo($: EngineInterface, taskId?: string) {
   const now = await $.clock.now()
+  if (taskId !== undefined) taskBook = await updateTasks($, b => ({ ...b, current: taskId }))
+  else taskBook = await loadTasks($)
+  const cur = taskBook.list.find(t => t.id === taskBook.current && !t.done)
   await commit($, s => ({
     ...s,
     pomo: {
@@ -545,16 +567,26 @@ async function startPomo($: EngineInterface) {
       turnsAtStart: s.turns,
       // 如果是从休息直接开下一个，保留最初的专注模式开关
       prevFocus: s.pomo.phase === 'idle' ? s.prefs.focus : s.pomo.prevFocus,
+      startedAt: now,
+      taskId: cur?.id ?? '',
     },
     prefs: { ...s.prefs, focus: true },
   }))
   const { prefs } = await loadProgress($)
-  await setMood($, 'happy', { holdMs: 4000, say: `🍅 开始专注 ${prefs.pomoMin} 分钟！我会安静陪着你` })
+  await setMood($, 'happy', { holdMs: 4000, say: `🍅 开始专注 ${prefs.pomoMin} 分钟${cur ? `：${cur.title}` : ''}！我会安静陪着你` })
 }
 
-/** 停掉番茄钟，专注模式还原成开始前的样子 */
+/** 停掉番茄钟，专注模式还原成开始前的样子。专注到一半停的，也记进日记（标成"中途停止"） */
 async function stopPomo($: EngineInterface, say = '番茄钟停下来了') {
+  const now = await $.clock.now()
+  const before = (await loadProgress($)).pomo
   await commit($, s => ({ ...s, pomo: { ...POMO_IDLE }, prefs: { ...s.prefs, focus: s.pomo.prevFocus } }))
+  if (before.phase === 'focus' && before.startedAt > 0 && now - before.startedAt >= 60000) {
+    await recordPomo($, {
+      start: before.startedAt, end: now, plannedMin: Math.round((before.endsAt - before.startedAt) / 60000),
+      done: false, earned: false, taskId: before.taskId,
+    })
+  }
   await setMood($, 'idle', { say })
 }
 
@@ -568,6 +600,7 @@ async function finishPomoPhase($: EngineInterface, expectedEndsAt: number) {
   let earned = false
   let breakMin = 0
   let isLong = false
+  let done: PomoRecord | null = null
 
   await commit(
     $,
@@ -579,6 +612,12 @@ async function finishPomoPhase($: EngineInterface, expectedEndsAt: number) {
         const round = s.pomo.round + 1
         isLong = round % 4 === 0
         breakMin = isLong ? s.prefs.longBreakMin : s.prefs.breakMin
+        if (s.pomo.startedAt > 0) {
+          done = {
+            start: s.pomo.startedAt, end: s.pomo.endsAt, plannedMin: Math.round((s.pomo.endsAt - s.pomo.startedAt) / 60000),
+            done: true, earned, taskId: s.pomo.taskId,
+          }
+        }
         return {
           ...s,
           coins: s.coins + (earned ? COIN_POMO : 0),
@@ -595,6 +634,8 @@ async function finishPomoPhase($: EngineInterface, expectedEndsAt: number) {
   )
 
   const { prefs } = await loadProgress($)
+  const rec = done as PomoRecord | null // TS 看不出它在上面的函数里被改过
+  if (rec) await recordPomo($, rec)
   if (what === 'focusDone') {
     if (earned) await logToday($, d => {
       d.pomos = (d.pomos ?? 0) + 1
@@ -746,6 +787,14 @@ async function hubSnapshot($: EngineInterface): Promise<{ now: number; body: str
     },
     prefs: p.prefs,
     note: hubNote,
+    tasks: {
+      current: taskBook.current,
+      running: p.pomo.phase === 'focus' ? p.pomo.taskId : '',
+      list: taskBook.list
+        .filter(t => !t.done || now - t.doneAt < 7 * 86400000) // 完成的只留最近 7 天
+        .map(t => ({ id: t.id, title: t.title, estimate: t.estimate, done: t.done, pomos: t.pomos, focusMin: Math.round(t.focusMs / 60000), doneAt: t.doneAt })),
+    },
+    pomoStats: hubView === 'pomo' || hubView === 'tasks' ? pomoStats(await loadPomoLog($), taskBook, now) : null,
     dex: hubView === 'dex' ? hubDexData(p, lv, night) : null,
     week: hubView === 'week' ? await hubWeekData($, p, now) : null,
   }
@@ -800,7 +849,7 @@ async function writeHubState($: EngineInterface, force = false) {
   await $.fs.write(hubStatePath, `{"now":${now},${body.slice(1)}`)
 }
 
-type HubAction = { type?: unknown; id?: unknown; what?: unknown; page?: unknown; form?: unknown; act?: unknown; slot?: unknown; offset?: unknown; prefs?: unknown; where?: unknown }
+type HubAction = { type?: unknown; id?: unknown; what?: unknown; page?: unknown; form?: unknown; act?: unknown; slot?: unknown; offset?: unknown; prefs?: unknown; where?: unknown; title?: unknown; estimate?: unknown }
 const SOUNDS: Sound[] = ['achievement', 'done', 'coin', 'nudge']
 
 /** 窗口里按了按钮 → 照做（和 /pet 面板用同一套函数） */
@@ -832,8 +881,44 @@ async function hubAction($: EngineInterface, a: HubAction) {
       break
     }
     case 'pomo-start':
-      await startPomo($)
+      await startPomo($, typeof a.id === 'string' ? a.id : undefined)
       break
+    case 'task-add': {
+      const title = typeof a.title === 'string' ? a.title.trim().slice(0, 60) : ''
+      const est = typeof a.estimate === 'number' ? Math.max(1, Math.min(10, Math.round(a.estimate))) : 1
+      if (title === '') break
+      const t = await $.clock.now()
+      taskBook = await updateTasks($, b => {
+        const nt = { id: newTaskId(t), title, estimate: est, done: false, createdAt: t, doneAt: 0, pomos: 0, focusMs: 0 }
+        return { list: [nt, ...b.list], current: b.current || nt.id } // 第一个任务自动设成"正在做"
+      })
+      break
+    }
+    case 'task-done': {
+      const t = await $.clock.now()
+      let finished = ''
+      taskBook = await updateTasks($, b => ({
+        current: b.current === id ? '' : b.current,
+        list: b.list.map(x => {
+          if (x.id !== id) return x
+          if (!x.done) finished = x.title
+          return { ...x, done: !x.done, doneAt: x.done ? 0 : t }
+        }),
+      }))
+      if (finished) await setMood($, 'happy', { holdMs: 4000, say: `✅ 完成「${finished}」！` })
+      break
+    }
+    case 'task-del':
+      taskBook = await updateTasks($, b => ({ current: b.current === id ? '' : b.current, list: b.list.filter(x => x.id !== id) }))
+      break
+    case 'task-pick':
+      taskBook = await updateTasks($, b => ({ ...b, current: b.list.some(x => x.id === id && !x.done) ? id : '' }))
+      break
+    case 'task-est': {
+      const est = typeof a.estimate === 'number' ? Math.max(1, Math.min(10, Math.round(a.estimate))) : 0
+      if (est) taskBook = await updateTasks($, b => ({ ...b, list: b.list.map(x => (x.id === id ? { ...x, estimate: est } : x)) }))
+      break
+    }
     case 'pomo-stop':
       await stopPomo($)
       break
@@ -1092,6 +1177,7 @@ function islandData(p: Pet): Record<string, unknown> {
     say: p.say,
     lv,
     form: formOf(lv),
+    task: p.pomo.phase === 'focus' ? taskTitle(p.pomo.taskId) : '',
     pomo: {
       phase: p.pomo.phase,
       endsAt: p.pomo.endsAt,
@@ -1152,6 +1238,7 @@ export const register: Register = on => {
     }
     const now = await $.clock.now()
     isWindows = (await $.session.info()).platform === 'windows'
+    taskBook = await loadTasks($)
     await sync($)
     await update($, pet, p => ({ ...p, lastActive: p.lastActive || now }))
 
@@ -1169,7 +1256,10 @@ export const register: Register = on => {
     $.clock.every(700, async () => {
       ticks++
       await update($, frameAtom, f => (f + 1) % 1000) // 只有终端文字版读它
-      if (ticks % 10 === 0) await sync($)
+      if (ticks % 10 === 0) {
+        await sync($)
+        taskBook = await loadTasks($)
+      }
       const t = await $.clock.now()
       const p = await read($, pet)
       const seed = Math.floor(t / 1000)

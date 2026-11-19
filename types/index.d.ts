@@ -65,6 +65,10 @@ export type Pomo = {
   turnsAtStart: number
   /** 开始前专注模式是开还是关（结束后还原） */
   prevFocus: boolean
+  /** 这个番茄几点开始的（记番茄日记用） */
+  startedAt: number
+  /** 这个番茄在做哪个任务（'' = 没指定） */
+  taskId: string
 }
 
 export type Prefs = {

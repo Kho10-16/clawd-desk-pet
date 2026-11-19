@@ -201,7 +201,7 @@ export const emptyProgress: Progress = {
   questDay: '',
   questDone: [],
   questFullDays: 0,
-  pomo: { phase: 'idle', endsAt: 0, round: 0, turnsAtStart: 0, prevFocus: false },
+  pomo: { phase: 'idle', endsAt: 0, round: 0, turnsAtStart: 0, prevFocus: false, startedAt: 0, taskId: '' },
   pomoTotal: 0,
   nightNagAt: 0,
   prefs: {
