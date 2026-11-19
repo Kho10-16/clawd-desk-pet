@@ -41,12 +41,13 @@ In the **Claude desktop app** (where `/plugin` does not run): click **+** next t
 
 | Command | What it does |
 |---|---|
-| `/pet` | Open Clawd's panel: stats, settings, wardrobe, shop, badges 打开养成面板 |
+| `/pet` | Open Clawd's panel: stats, wardrobe, shop, badges 打开养成面板 |
+| `/clawd-settings` | Open the settings window (a native Windows dialog, outside Claude) 弹出设置窗口 |
 | `/clawd-dex` | Open the gallery 打开图鉴 |
 | `/clawd-week` | Open the weekly report helper 打开周报 |
 | `/clawd-focus` | Toggle focus mode 开关专注模式 |
 
-Panel hotkeys: `p` pat · `f` snack · `w` wake · `d` gallery · `r` weekly report · `z` focus · `s` sound
+Panel hotkeys: `p` pat · `f` snack · `w` wake · `d` gallery · `r` weekly report · `s` settings window
 
 ## 🛠 Customize 自己改
 
@@ -56,6 +57,7 @@ Panel hotkeys: `p` pat · `f` snack · `w` wake · `d` gallery · `r` weekly rep
 | `hooks/art.ts` | All pixel art and animations 像素美术和动画 |
 | `hooks/register.tsx` | Claude Code events and the panels 事件和面板 |
 | `hooks/report.ts` | Daily log and weekly report 小账本和周报 |
+| `tools/settings.ps1` | The Windows settings window 设置窗口 |
 | `tools/make-sounds.mjs` | Synthesizes the original sound effects — run `node tools/make-sounds.mjs` 合成原创音效 |
 
 ## 📝 Notes
