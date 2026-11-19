@@ -679,6 +679,16 @@ async function patClawd($: EngineInterface) {
 let hubOpen = false
 let hubStatePath = ''
 let hubLast = ''
+/** 窗口正在看哪一页：图鉴 / 周报这种"重"的数据，只有在看的时候才算 */
+let hubView = 'home'
+/** 图鉴里选的形态、动作、试穿（只是预览） */
+let hubDex: Dex | null = null
+let hubWeekOffset = 0
+/** 要在窗口里弹一下的话（id 变了才弹） */
+let hubNote = { id: 0, text: '' }
+function setHubNote(text: string) {
+  hubNote = { id: hubNote.id + 1, text }
+}
 
 /** 窗口需要的所有东西，打包成一个 JSON（now 不算在"有没有变"里面） */
 async function hubSnapshot($: EngineInterface): Promise<{ now: number; body: string }> {
@@ -732,8 +742,51 @@ async function hubSnapshot($: EngineInterface): Promise<{ now: number; body: str
       pomoMin: p.prefs.pomoMin, breakMin: p.prefs.breakMin,
       breakLen: p.pomo.round === 0 ? p.prefs.longBreakMin : p.prefs.breakMin, // 长休息完 round 会归零
     },
+    prefs: p.prefs,
+    note: hubNote,
+    dex: hubView === 'dex' ? hubDexData(p, lv, night) : null,
+    week: hubView === 'week' ? await hubWeekData($, p, now) : null,
   }
   return { now, body: JSON.stringify(snap) }
+}
+
+/** 📖 图鉴：选中的动作在 4 个形态上的样子 + 放大图 */
+function hubDexData(p: Pet, lv: number, night: boolean) {
+  if (!hubDex) hubDex = { form: formOf(lv), act: 'idle', outfit: { ...p.outfit } }
+  const d = hubDex
+  const a = parseAct(d.act)
+  const tempo = tempoOf(p.prefs)
+  const isNight = night || a.night
+  return {
+    form: d.form,
+    act: d.act,
+    outfit: d.outfit,
+    acts: DEX_ACTS,
+    forms: DEX_FORMS.map(x => ({
+      id: x.id, label: FORM_LABEL[x.id], unlockLv: x.unlockLv, owned: lv >= x.unlockLv,
+      img: clawdSvg(a.mood, x.id, false, a.tool, d.outfit, tempo, a.skit, 'idle', isNight),
+    })),
+    big: clawdSvg(a.mood, d.form, false, a.tool, d.outfit, tempo, a.skit, 'idle', isNight),
+  }
+}
+
+/** 📋 周报：和 /clawd-week 面板同一套计算 */
+async function hubWeekData($: EngineInterface, p: Pet, now: number) {
+  const all = await loadDays($)
+  const w = buildWeek(all, now, hubWeekOffset, p.prefs.internStart)
+  const today = dayKey(now)
+  return {
+    offset: hubWeekOffset,
+    title: w.internWeek ? `实习第 ${w.internWeek} 周` : `第 ${w.week} 周`,
+    range: `${w.start} ~ ${w.end}`,
+    days: w.days.map(x => ({ label: x.label, turns: x.log.turns, tools: x.log.tools, isToday: x.key === today })),
+    total: { turns: w.total.turns, tools: w.total.tools, edits: w.total.edits, fails: w.total.fails, pomos: w.total.pomos ?? 0 },
+    activeDays: w.activeDays,
+    projects: w.total.projects,
+    files: top(w.total.files, 5),
+    md: weekMarkdown(w),
+    internStart: p.prefs.internStart,
+  }
 }
 
 /** 状态有变才写文件（就像有新消息才更新公告栏） */
@@ -745,7 +798,8 @@ async function writeHubState($: EngineInterface, force = false) {
   await $.fs.write(hubStatePath, `{"now":${now},${body.slice(1)}`)
 }
 
-type HubAction = { type?: unknown; id?: unknown; what?: unknown }
+type HubAction = { type?: unknown; id?: unknown; what?: unknown; page?: unknown; form?: unknown; act?: unknown; slot?: unknown; offset?: unknown; prefs?: unknown }
+const SOUNDS: Sound[] = ['achievement', 'done', 'coin', 'nudge']
 
 /** 窗口里按了按钮 → 照做（和 /pet 面板用同一套函数） */
 async function hubAction($: EngineInterface, a: HubAction) {
@@ -784,6 +838,58 @@ async function hubAction($: EngineInterface, a: HubAction) {
     case 'pomo-end':
       await stopPomo($, '今天辛苦啦～')
       break
+    case 'view':
+      if (typeof a.page === 'string') hubView = a.page
+      break
+    case 'dex': {
+      const p = await read($, pet)
+      const d = hubDex ?? { form: formOf(levelOf(p.xp)), act: 'idle', outfit: { ...p.outfit } }
+      const form = DEX_FORMS.find(x => x.id === a.form)
+      if (form) d.form = form.id
+      if (typeof a.act === 'string' && DEX_ACTS.some(x => x.value === a.act)) d.act = a.act
+      const slot = SLOTS.find(x => x === a.slot)
+      if (slot) {
+        const item = ITEMS.find(i => i.id === id && i.slot === slot)
+        d.outfit = { ...d.outfit, [slot]: item ? item.id : '' }
+      }
+      if (a.what === 'mine') d.outfit = { ...p.outfit }
+      if (a.what === 'bare') d.outfit = { head: '', face: '', neck: '' }
+      hubDex = { ...d }
+      break
+    }
+    case 'week':
+      if (typeof a.offset === 'number' && [0, -1, -2, -3].includes(a.offset)) hubWeekOffset = a.offset
+      break
+    case 'week-save': {
+      const p = await loadProgress($)
+      const w = buildWeek(await loadDays($), await $.clock.now(), hubWeekOffset, p.prefs.internStart)
+      const path = `${$.plugin.root}/reports/${w.start}_${w.end}.md`
+      try {
+        await $.fs.write(path, weekMarkdown(w))
+        setHubNote(`✅ 已存到 reports/${w.start}_${w.end}.md`)
+      } catch {
+        setHubNote('❌ 存文件失败')
+      }
+      break
+    }
+    case 'week-copy': {
+      // 网页自己复制失败时的后备：用 PowerShell 放进剪贴板
+      const p = await loadProgress($)
+      const w = buildWeek(await loadDays($), await $.clock.now(), hubWeekOffset, p.prefs.internStart)
+      setHubNote((await copyToClipboard($, weekMarkdown(w))) ? '✅ 已复制！去周报里直接粘贴吧' : '❌ 复制失败')
+      break
+    }
+    case 'prefs':
+      if (a.prefs && typeof a.prefs === 'object') {
+        const next = cleanPrefs(a.prefs as Partial<Prefs>)
+        await commit($, x => ({ ...x, prefs: { ...x.prefs, ...next } }))
+      }
+      break
+    case 'sound': {
+      const snd = SOUNDS.find(x => x === id)
+      if (snd) void playSound($, snd)
+      break
+    }
     case 'open':
       if (a.what === 'settings') void openSettingsWindow($)
       else if (a.what === 'dex') await $.ui.open({ id: DEX_PANE, title: 'Clawd 图鉴' })

@@ -129,6 +129,44 @@
   .clock > div { width: 172px; height: 172px; border-radius: 50%; background: rgba(255, 255, 255, .85); display: grid; place-items: center; text-align: center; }
   .clock b { font-size: 42px; letter-spacing: -.03em; font-variant-numeric: tabular-nums; display: block; }
 
+  /* 设置：苹果风的行、开关、分段按钮、下拉 */
+  .rows { padding: 4px 20px; }
+  .rows .row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 13px 0; border-bottom: 1px solid rgba(0, 0, 0, .06); font-size: 14px; }
+  .rows .row:last-child { border-bottom: 0; }
+  .rows small { display: block; color: var(--ink2); font-size: 12px; margin-top: 2px; }
+  .sw { width: 46px; height: 28px; border-radius: 99px; background: rgba(0, 0, 0, .12); position: relative; cursor: pointer; transition: background .25s; flex: none; }
+  .sw::after { content: ""; position: absolute; top: 2px; left: 2px; width: 24px; height: 24px; border-radius: 99px; background: #fff;
+               box-shadow: 0 2px 5px rgba(0, 0, 0, .25); transition: transform .3s cubic-bezier(.3, 1.5, .5, 1), width .2s; }
+  .sw.on { background: var(--green); }
+  .sw.on::after { transform: translateX(18px); }
+  .sw:active::after { width: 30px; }
+  .sw.on:active::after { transform: translateX(12px); }
+  .seg { display: inline-flex; padding: 2px; border-radius: 10px; background: rgba(0, 0, 0, .07); flex: none; }
+  .seg button { all: unset; cursor: pointer; padding: 5px 13px; border-radius: 8px; font-size: 12px; transition: background .2s; }
+  .seg button.on { background: #fff; box-shadow: 0 2px 6px rgba(0, 0, 0, .12); font-weight: 600; }
+  .pick { appearance: none; border: 1px solid rgba(0, 0, 0, .08); border-radius: 9px; padding: 6px 30px 6px 12px; font: inherit; font-size: 13px; color: var(--ink); cursor: pointer;
+          background: rgba(255, 255, 255, .8) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='14'%3E%3Cpath d='M2 5l3-3 3 3M2 9l3 3 3-3' fill='none' stroke='%230a84ff' stroke-width='1.6' stroke-linecap='round'/%3E%3C/svg%3E") no-repeat right 10px center;
+          box-shadow: 0 1px 2px rgba(0, 0, 0, .06); flex: none; }
+  .pick:focus, .date:focus { outline: 2px solid rgba(10, 132, 255, .5); outline-offset: 1px; }
+  .date { border: 1px solid rgba(0, 0, 0, .08); border-radius: 9px; padding: 5px 10px; font: inherit; font-size: 13px; background: rgba(255, 255, 255, .8); color: var(--ink); }
+  .note { font-size: 12px; color: var(--ink2); margin: 8px 20px 0; }
+  .tiny { padding: 6px 12px; font-size: 12px; }
+
+  /* 图鉴 */
+  .dexbig { display: grid; grid-template-columns: 240px 1fr; gap: 24px; align-items: center; padding: 22px 26px; }
+  .dexbig .stage { height: 210px; }
+  .dexbig .stage img { width: 210px; }
+  .dexctl { display: grid; gap: 12px; }
+  .dexctl label { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 13px; }
+  .dexctl .pick { min-width: 190px; }
+
+  /* 周报 */
+  .wbars { display: grid; grid-template-columns: repeat(7, 1fr); gap: 14px; align-items: end; height: 190px; padding: 12px 8px 0; }
+  .wbars div { display: flex; flex-direction: column; align-items: center; gap: 6px; height: 100%; justify-content: flex-end; font-size: 12px; color: var(--ink2); }
+  .wbars i { width: 100%; max-width: 36px; border-radius: 10px 10px 6px 6px; background: linear-gradient(180deg, #f2a283, var(--claude)); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .6); transition: height .5s; }
+  .wbars .today { color: var(--claude); font-weight: 700; }
+  .md { white-space: pre-wrap; font: 12.5px/1.65 ui-monospace, "Cascadia Code", Consolas, "Microsoft YaHei UI", monospace; max-height: 340px; overflow: auto; user-select: text; padding: 16px 20px; }
+
   .toast { position: fixed; left: 50%; bottom: 26px; transform: translate(-50%, 30px); opacity: 0; z-index: 9; padding: 10px 18px; font-size: 13px; transition: .35s cubic-bezier(.3, 1.4, .5, 1); }
   .toast.on { transform: translate(-50%, 0); opacity: 1; }
   .offline { position: fixed; inset: 0; z-index: 20; display: none; place-items: center; background: rgba(246, 236, 230, .6); backdrop-filter: blur(8px); font-size: 15px; color: var(--ink2); text-align: center; }
@@ -160,8 +198,9 @@ const pct = (a, b) => (b > 0 ? Math.max(0, Math.min(100, Math.round((a / b) * 10
 const PAGES = [
   ['home', '首页', '🦀', '#ff9f7a'], ['quests', '每日任务', '📅', '#ffcf5c'], ['pomo', '番茄钟', '🍅', '#ff7b72'],
   ['shop', '商店', '🛍️', '#7cc6ff'], ['wardrobe', '衣柜', '👗', '#c9a6ff'], ['badges', '徽章', '🏅', '#ffd66b'],
+  ['dex', '图鉴', '📖', '#8be0b0'], ['week', '周报', '📋', '#9fb7ff'], ['settings', '设置', '⚙️', '#c7c7cc'],
 ]
-const OUTS = [['dex', '图鉴', '📖', '#8be0b0'], ['week', '周报', '📋', '#9fb7ff'], ['settings', '设置', '⚙️', '#c7c7cc']]
+const SEP_BEFORE = 'dex' // 从这一页开始，前面画一条分隔线
 
 let S = null          // 最新状态
 let skew = 0          // Clawd 的时钟 - 这边的时钟
@@ -183,20 +222,15 @@ function offline(on) { $('#offline').classList.toggle('on', on) }
 
 // ---------- 侧边栏 ----------
 for (const [id, name, ic, color] of PAGES) {
+  if (id === SEP_BEFORE) $('#side').appendChild(el('div', 'sep'))
   const b = el('button', 'nav', `<span class="ic" style="background:${color}">${ic}</span>${name}`)
   b.dataset.id = id; b.onclick = () => show(id); $('#side').appendChild(b)
   const sec = el('section', 'page'); sec.id = 'p-' + id; $('#main').appendChild(sec)
 }
-$('#side').appendChild(el('div', 'sep'))
-for (const [id, name, ic, color] of OUTS) {
-  const b = el('button', 'nav', `<span class="ic" style="background:${color}">${ic}</span>${name}<span class="out">↗</span>`)
-  b.title = '在 Claude 里打开'
-  b.onclick = () => { act('open', { what: id }); toast(id === 'settings' ? '⚙️ 设置窗口打开中…' : `已在 Claude 里打开${name}`) }
-  $('#side').appendChild(b)
-}
 $('#side').appendChild(el('div', 'foot', '全部在本地运行<br>不消耗 token'))
 
 function show(id) {
+  if (id !== current || !show.told) { act('view', { page: id }); show.told = true }
   current = id
   document.querySelectorAll('.nav[data-id]').forEach(n => n.classList.toggle('on', n.dataset.id === id))
   document.querySelectorAll('.page').forEach(p => p.classList.toggle('on', p.id === 'p-' + id))
@@ -299,6 +333,106 @@ const VIEWS = {
             <small>${i.owned ? (i.worn ? '✓ 穿着中 · 点一下脱下' : '点一下穿上') : '🔒 ' + esc(i.hint)}</small></div>`).join('')}
         </div>`).join('')}`,
   },
+  dex: {
+    sig: s => s.dex,
+    html: s => {
+      const d = s.dex
+      if (!d) return '<h1>图鉴</h1><div class="muted" style="margin:6px">加载中…</div>'
+      const opt = (v, label, on) => `<option value="${esc(v)}" ${on ? 'selected' : ''}>${esc(label)}</option>`
+      const slotPick = (slot, name) => `<label>${name}<select class="pick" data-dex-slot="${slot}">${opt('', '不戴', !d.outfit[slot])}${s.items.filter(i => i.slot === slot).map(i => opt(i.id, (i.owned ? '' : '🔒 ') + i.name, d.outfit[slot] === i.id)).join('')}</select></label>`
+      return `
+      <h1>图鉴 <span class="muted" style="font-size:15px">只是预览，不会解锁</span></h1>
+      <div class="tiles" style="grid-template-columns:repeat(4,1fr)">${d.forms.map(f => `
+        <div class="glass tile click ${f.owned ? '' : 'locked'} ${d.form === f.id ? 'worn' : ''}" data-dex-form="${f.id}">
+          <img src="${svg(f.img)}" alt="" style="width:110px"><b>${esc(f.label)}</b><small>${f.owned ? '✅ 已拥有' : '🔒 Lv.' + f.unlockLv}</small></div>`).join('')}
+      </div>
+      <div class="glass dexbig" style="margin-top:14px">
+        <div class="stage"><img src="${svg(d.big)}" alt=""></div>
+        <div class="dexctl">
+          <b style="font-size:18px">${esc(d.forms.find(f => f.id === d.form)?.label)} · ${esc(d.acts.find(a => a.value === d.act)?.label)}</b>
+          <label>🎬 动作<select class="pick" data-dex-act>${d.acts.map(a => opt(a.value, a.label, a.value === d.act)).join('')}</select></label>
+          ${slotPick('head', '🎩 头饰')}${slotPick('face', '😎 脸部')}${slotPick('neck', '🎀 颈部')}
+          <div class="pills" style="margin-top:4px"><button class="btn tiny" data-dex-what="mine">穿上我现在的衣服</button><button class="btn tiny" data-dex-what="bare">全部脱掉</button></div>
+        </div>
+      </div>`
+    },
+  },
+  week: {
+    sig: s => [s.week, s.note.id],
+    html: s => {
+      const w = s.week
+      if (!w) return '<h1>周报</h1><div class="muted" style="margin:6px">加载中…</div>'
+      const max = Math.max(1, ...w.days.map(d => d.turns))
+      return `
+      <h1>周报 <span class="muted" style="font-size:15px">${esc(w.title)} · ${esc(w.range)}</span></h1>
+      <div class="seg" style="margin:0 4px 14px">${[0, -1, -2, -3].map(o => `<button data-week="${o}" class="${w.offset === o ? 'on' : ''}">${o === 0 ? '本周' : o === -1 ? '上周' : -o + ' 周前'}</button>`).join('')}</div>
+      <div class="glass card">
+        <div class="muted">每天的对话轮数</div>
+        <div class="wbars">${w.days.map(d => `<div class="${d.isToday ? 'today' : ''}" title="${d.turns} 轮 · ${d.tools} 次操作"><span>${d.turns || ''}</span><i style="height:${Math.round((d.turns / max) * 140) + 4}px;${d.turns ? '' : 'opacity:.25'}"></i>${esc(d.label)}${d.isToday ? ' ·今天' : ''}</div>`).join('')}</div>
+      </div>
+      <div class="kpis">
+        <div class="glass kpi"><b>${w.total.turns}</b><span>对话轮数 · 开发 ${w.activeDays} 天</span></div>
+        <div class="glass kpi"><b>${w.total.tools}</b><span>工具操作</span></div>
+        <div class="glass kpi"><b>${w.total.edits}</b><span>改文件</span></div>
+        <div class="glass kpi"><b>${w.total.pomos}</b><span>🍅 番茄</span></div>
+      </div>
+      <h2>项目和文件</h2>
+      <div class="glass card">
+        <div class="muted">项目：${w.projects.length ? w.projects.map(esc).join('、') : '（还没有记录）'}</div>
+        <div class="muted" style="margin-top:6px">改得最多：${w.files.length ? w.files.map(([f, n]) => esc(f) + ' ×' + n).join('、') : '（还没有记录）'}</div>
+      </div>
+      <h2>📝 周报草稿 <span style="font-weight:400">（周数和日期 / 目前进度 / 遇到的困难 / 下周计划 / 截图，（填写）的地方要你补上）</span></h2>
+      <div class="pills" style="margin:0 4px 12px"><button class="btn blue" data-week-copy>📋 复制到剪贴板</button><button class="btn" data-act="week-save">💾 存成文件</button>
+        <span class="muted" style="align-self:center">实习开始日期：${w.internStart || '没设（去设置页填）'}</span></div>
+      <div class="glass md">${esc(w.md)}</div>`
+    },
+  },
+  settings: {
+    sig: s => s.prefs,
+    html: s => {
+      const p = s.prefs
+      const sw = k => `<div class="sw ${p[k] ? 'on' : ''}" data-pref="${k}" data-kind="bool" role="switch" aria-checked="${!!p[k]}"></div>`
+      const seg = (k, opts) => `<div class="seg">${opts.map(([label, v]) => `<button class="${p[k] === v ? 'on' : ''}" data-pref="${k}" data-v="${v}">${label}</button>`).join('')}</div>`
+      const pick = (k, opts) => `<select class="pick" data-pref="${k}" data-kind="num">${opts.map(([label, v]) => `<option value="${v}" ${p[k] === v ? 'selected' : ''}>${label}</option>`).join('')}</select>`
+      const row = (title, sub, ctl) => `<div class="row"><div>${title}${sub ? `<small>${sub}</small>` : ''}</div>${ctl}</div>`
+      return `
+      <h1>设置</h1>
+      <h2>专注与打扰</h2>
+      <div class="glass rows">
+        ${row('专注模式', '不说话、不弹提示、动画放慢', sw('focus'))}
+        ${row('聊天框上方显示文字', '关掉之后只剩 Clawd 自己', sw('showText'))}
+      </div>
+      <h2>提示音</h2>
+      <div class="glass rows">
+        ${row('开启提示音', '', sw('sound'))}
+        ${row('音量', '', seg('volume', [['低', 'low'], ['中', 'mid'], ['高', 'high']]))}
+        ${row('完成音', '任务超过这么久，做完时响一声', pick('longTaskSec', [['10 秒', 10], ['30 秒', 30], ['1 分钟', 60], ['2 分钟', 120]]))}
+        ${row('试听', '', `<div class="pills" style="margin:0">${[['成就', 'achievement'], ['完成', 'done'], ['金币', 'coin'], ['提醒', 'nudge']].map(([l, id]) => `<button class="btn tiny" data-act="sound" data-id="${id}">▶ ${l}</button>`).join('')}</div>`)}
+      </div>
+      <h2>外观</h2>
+      <div class="glass rows">
+        ${row('动画速度', '', seg('speed', [['慢', 'slow'], ['正常', 'normal'], ['快', 'fast']]))}
+        ${row('聊天框上方的大小', '', seg('size', [['小', 'small'], ['中', 'medium'], ['大', 'large']]))}
+        ${row('多久没动静就睡觉', '', pick('sleepMin', [['1 分钟', 1], ['2 分钟', 2], ['5 分钟', 5], ['10 分钟', 10], ['永远不睡', 0]]))}
+      </div>
+      <h2>番茄钟</h2>
+      <div class="glass rows">
+        ${row('一个番茄专注', '', pick('pomoMin', [['15 分钟', 15], ['25 分钟', 25], ['30 分钟', 30], ['45 分钟', 45], ['50 分钟', 50]]))}
+        ${row('短休息', '', pick('breakMin', [['3 分钟', 3], ['5 分钟', 5], ['10 分钟', 10]]))}
+        ${row('长休息', '每完成 4 个番茄，休息久一点', pick('longBreakMin', [['10 分钟', 10], ['15 分钟', 15], ['20 分钟', 20], ['30 分钟', 30]]))}
+      </div>
+      <h2>夜间模式</h2>
+      <div class="glass rows">
+        ${row('换睡衣的时间', '从这时开始，一直到早上 6 点', pick('nightFrom', [['晚上 9 点', 21], ['晚上 10 点', 22], ['晚上 11 点', 23], ['半夜 12 点', 24], ['关闭', 0]]))}
+        ${row('提醒你去睡觉', '只在你还在写代码时；专注和番茄专注中不打扰', pick('nightRemindMin', [['每 15 分钟', 15], ['每 30 分钟', 30], ['每 1 小时', 60], ['不提醒', 0]]))}
+      </div>
+      <h2>周报</h2>
+      <div class="glass rows">
+        ${row('实习开始日期', '用来算"实习第几周"', `<span style="display:flex;gap:8px;align-items:center"><input type="date" class="date" data-pref="internStart" value="${esc(p.internStart)}"><button class="btn tiny" data-clear-intern>清除</button></span>`)}
+      </div>
+      <div class="note">改了马上生效、自动保存，所有聊天里的 Clawd 都会同步。</div>`
+    },
+  },
   badges: {
     sig: s => s.badges,
     html: s => `
@@ -322,6 +456,10 @@ function render(force = false) {
     $('#p-' + current).innerHTML = VIEWS[current].html(S)
     main.scrollTop = top
   }
+  if (S.note && S.note.id !== render.noteId) {
+    if (render.noteId !== undefined && S.note.text) toast(S.note.text)
+    render.noteId = S.note.id
+  }
   // 会一直变的小东西：不用重画整页
   const hero = $('#hero-img'); if (hero) setImg(hero, S.hero)
   const say = $('#say'); if (say) say.textContent = S.say
@@ -344,7 +482,36 @@ function tick() {
 setInterval(tick, 1000)
 
 // ---------- 所有按钮都在这里接 ----------
-document.addEventListener('click', e => {
+// 设置改了 → 整份设置交给 Clawd（Clawd 会再检查一遍值合不合法）
+function setPref(k, v) {
+  if (!S) return
+  S.prefs = { ...S.prefs, [k]: v }
+  sigs.settings = undefined
+  render(true)
+  act('prefs', { prefs: S.prefs })
+}
+document.addEventListener('change', e => {
+  const t = e.target
+  if (t.dataset.pref) return setPref(t.dataset.pref, t.dataset.kind === 'num' ? Number(t.value) : t.value)
+  if (t.dataset.dexAct !== undefined) return act('dex', { act: t.value })
+  if (t.dataset.dexSlot) return act('dex', { slot: t.dataset.dexSlot, id: t.value })
+})
+document.addEventListener('click', async e => {
+  const x = e.target.closest('[data-pref],[data-dex-form],[data-dex-what],[data-week],[data-week-copy],[data-clear-intern]')
+  if (x) {
+    if (x.dataset.kind === 'bool') return setPref(x.dataset.pref, !S.prefs[x.dataset.pref])
+    if (x.dataset.v !== undefined) return setPref(x.dataset.pref, x.dataset.v)
+    if (x.dataset.dexForm) return act('dex', { form: x.dataset.dexForm })
+    if (x.dataset.dexWhat) return act('dex', { what: x.dataset.dexWhat })
+    if (x.dataset.week !== undefined) return act('week', { offset: Number(x.dataset.week) })
+    if (x.dataset.clearIntern !== undefined) return setPref('internStart', '')
+    if (x.dataset.weekCopy !== undefined) {
+      try { await navigator.clipboard.writeText(S.week.md); toast('✅ 已复制！去周报里直接粘贴吧') }
+      catch { act('week-copy') }
+      return
+    }
+    return
+  }
   const b = e.target.closest('[data-act],[data-go],#hero-img')
   if (!b) return
   if (b.id === 'hero-img') { b.classList.remove('boing'); void b.offsetWidth; b.classList.add('boing'); return act('pat') }
