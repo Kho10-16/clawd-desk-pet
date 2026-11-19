@@ -63,12 +63,13 @@ Panel hotkeys: `p` pat · `f` snack · `w` wake · `d` gallery · `r` weekly rep
 | `hooks/register.tsx` | Claude Code events and the panels 事件和面板 |
 | `hooks/report.ts` | Daily log and weekly report 小账本和周报 |
 | `hooks/quests.ts` | Daily quest pool 每日任务池 |
-| `tools/settings.ps1` | The Windows settings window 设置窗口 |
+| `tools/settings.ps1` | The Windows settings window 设置窗口 (Windows) |
+| `tools/settings-mac.js` | The macOS settings window 设置窗口 (macOS) |
 | `tools/make-sounds.mjs` | Synthesizes the original sound effects — run `node tools/make-sounds.mjs` 合成原创音效 |
 
 ## 📝 Notes
 
-- The settings window is Windows-only for now; everything else works on other systems too.
+- The settings window works on Windows (`tools/settings.ps1`) and macOS (`tools/settings-mac.js`, a native Cocoa window run by the built-in `osascript`). The macOS version is new and has not been tested on a real Mac yet; feedback welcome.
 - Sounds play through PowerShell on Windows (Claude Code's own audio player is silent there) and through Claude Code elsewhere.
 - Clawd's look is inspired by the Claude Code mascot; this is an unofficial fan project, not affiliated with Anthropic.
 - The weekly report data stays on your computer. Saved reports go to `reports/`, which is git-ignored.

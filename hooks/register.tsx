@@ -101,22 +101,32 @@ async function openSettingsWindow($: EngineInterface): Promise<boolean> {
     return true
   }
   const { platform } = await $.session.info()
-  if (platform !== 'windows') {
-    $.ui.toast('Clawd：设置窗口目前只支持 Windows')
+  if (platform !== 'windows' && platform !== 'macos') {
+    $.ui.toast('Clawd：设置窗口目前只支持 Windows 和 macOS')
     return false
   }
   settingsOpen = true
-  const root = $.plugin.root.replace(/\//g, '\\')
   const current = (await loadProgress($)).prefs
+
+  // Windows：PowerShell 窗口，设置从 stdin 递进去
+  // macOS：osascript（JavaScript）画的原生 Cocoa 窗口，设置当参数递进去
+  // 两边保存时都印出同一种 CLAWD_SETTINGS:{...}
+  let argv: string[]
+  let input: string | undefined
+  if (platform === 'windows') {
+    const root = $.plugin.root.replace(/\//g, '\\')
+    argv = ['powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-STA', '-File', `${root}\\tools\\settings.ps1`, '-Root', root]
+    input = JSON.stringify(current)
+  } else {
+    const root = $.plugin.root
+    argv = ['osascript', '-l', 'JavaScript', `${root}/tools/settings-mac.js`, root, JSON.stringify(current)]
+  }
 
   // 在后台等窗口关掉：窗口开多久都没关系，不会卡住 Claude
   void (async () => {
     let out = ''
     try {
-      const child = $.process.spawn({
-        argv: ['powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-STA', '-File', `${root}\\tools\\settings.ps1`, '-Root', root],
-        input: JSON.stringify(current),
-      })
+      const child = $.process.spawn(input === undefined ? { argv } : { argv, input })
       for await (const piece of child) {
         if (piece.stream === 'stdout') out += piece.text
       }
