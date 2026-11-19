@@ -12,9 +12,13 @@ Clawd watches what Claude is doing and reacts: it types on a tiny keyboard when 
 - **4 growth forms 四个形态**：宝宝期 → 成长期 → 绅士期 → 闪耀期, each with its own idle, action and mood animations
 - **Idle skits 发呆小剧场**：stretching, yawning, walking around, plus a special skit for each form
 - **Wardrobe & shop 衣柜和商店**：19 accessories, unlocked by achievements or bought with coins
-- **13 badges 成就徽章** with an original "achievement" chime 🔔
+- **15 badges 成就徽章** with an original "achievement" chime 🔔
 - **Focus mode 专注模式**：quiet, slower animations, no pop-ups, and a chime when a long task finishes
-- **Settings UI 设置界面**：volume, size, animation speed, sleep timer, and more
+- **"Waiting for you" nudge 等你回复提醒**：when Claude asks you a question or needs permission, Clawd holds up a ! ? sign and plays a soft ding-dong
+- **Daily quests 每日任务**：3 small goals a day (e.g. finish 5 turns, edit 3 files), plus a bonus for clearing all three
+- **Pomodoro timer 番茄钟** 🍅：focus 25 min → break 5 min, with a long break every 4 rounds. Clawd wears a tomato while you focus and holds a cup of water on breaks
+- **Night mode 夜间模式** 🌙：from 11pm (configurable) Clawd puts on a nightcap and pajamas, slows down, and gently reminds you to sleep. It only does this if you're still working, and never during focus mode or a pomodoro
+- **Settings window 设置窗口**：a macOS-style native window (sidebar, toggles, pop-up menus) for sound, size, speed, sleep timer, pomodoro lengths, night mode and more
 - **Gallery 图鉴**：preview every form, action, skit and accessory
 - **Weekly report helper 周报小助手**：keeps a local daily log and drafts a weekly report (progress / problems / next week)
 
@@ -46,8 +50,9 @@ In the **Claude desktop app** (where `/plugin` does not run): click **+** next t
 | `/clawd-dex` | Open the gallery 打开图鉴 |
 | `/clawd-week` | Open the weekly report helper 打开周报 |
 | `/clawd-focus` | Toggle focus mode 开关专注模式 |
+| `/clawd-pomo` | Start / stop the pomodoro timer 开始或停止番茄钟 |
 
-Panel hotkeys: `p` pat · `f` snack · `w` wake · `d` gallery · `r` weekly report · `s` settings window
+Panel hotkeys: `p` pat · `f` snack · `w` wake · `d` gallery · `r` weekly report · `s` settings window · `t` pomodoro
 
 ## 🛠 Customize 自己改
 
@@ -57,11 +62,13 @@ Panel hotkeys: `p` pat · `f` snack · `w` wake · `d` gallery · `r` weekly rep
 | `hooks/art.ts` | All pixel art and animations 像素美术和动画 |
 | `hooks/register.tsx` | Claude Code events and the panels 事件和面板 |
 | `hooks/report.ts` | Daily log and weekly report 小账本和周报 |
+| `hooks/quests.ts` | Daily quest pool 每日任务池 |
 | `tools/settings.ps1` | The Windows settings window 设置窗口 |
 | `tools/make-sounds.mjs` | Synthesizes the original sound effects — run `node tools/make-sounds.mjs` 合成原创音效 |
 
 ## 📝 Notes
 
+- The settings window is Windows-only for now; everything else works on other systems too.
 - Sounds play through PowerShell on Windows (Claude Code's own audio player is silent there) and through Claude Code elsewhere.
 - Clawd's look is inspired by the Claude Code mascot; this is an unofficial fan project, not affiliated with Anthropic.
 - The weekly report data stays on your computer. Saved reports go to `reports/`, which is git-ignored.
