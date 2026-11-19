@@ -50,6 +50,8 @@ export type Progress = {
   pomo: Pomo
   /** 累计完成的番茄数 */
   pomoTotal: number
+  /** 🌙 上一次提醒"该睡了"的时间(ms)；存在存档里，开好几个聊天也只提醒一次 */
+  nightNagAt: number
 }
 
 export type Pomo = {
@@ -90,6 +92,10 @@ export type Prefs = {
   breakMin: number
   /** 每 4 个番茄后的长休息几分钟 */
   longBreakMin: number
+  /** 🌙 几点开始夜间模式（一直到早上 6 点）；21~23 = 晚上几点，24 = 半夜 12 点，0 = 关闭 */
+  nightFrom: number
+  /** 🌙 夜里每隔几分钟提醒一次去睡觉，0 = 不提醒 */
+  nightRemindMin: number
 }
 
 /** 周报面板的状态 */

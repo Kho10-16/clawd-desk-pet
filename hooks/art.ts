@@ -520,6 +520,35 @@ function skitLook(skit: string, g: Geom): SkitLook {
         front: `<rect x="5.75" y="${g.eyeTop + 2.1}" width="1.5" height="1" fill="#3a1f17" class="fill-box" style="animation:yawnm 1.8s ease-in-out infinite"/>`,
         fx: `<text x="10.5" y="0" font-size="2.6" fill="#999" style="animation:rise 1.8s infinite">~</text>`,
       }
+    // ----- 🌙 夜里才演的 -----
+    case 'moon': // 看月亮：慢慢左右晃，月亮旁边的星星一闪一闪
+      return {
+        move: ['sway', 3, 'ease-in-out infinite'],
+        fx:
+          `<text x="-0.8" y="-1.2" font-size="3.4" fill="#f5d76e" style="animation:fade 3s infinite">☾</text>` +
+          [[2.6, -3.2], [4.4, -2.2], [1.4, -0.4]]
+            .map(([x, y], i) => px(x!, y!, 0.45, 0.45, '#fff6c8', `animation:fade 1.4s infinite ${i * 0.45}s`))
+            .join(''),
+      }
+    case 'pillow': // 抱枕头打瞌睡：钳子抱着白枕头，头一点一点
+      return {
+        move: ['droop', 2.6, 'ease-in-out infinite'],
+        eyes: 'shut',
+        clawL: 'none',
+        clawR: 'none',
+        front:
+          `<rect x="${g.left - 0.6}" y="${g.eyeTop + 2.3}" width="${g.right - g.left + 2.2}" height="1.7" rx="0.6" fill="#f3f1ff"/>` +
+          px(g.left + 0.6, g.eyeTop + 3, g.right - g.left - 0.2, 0.18, '#d2cdea'),
+        fx:
+          `<text x="11" y="-1" font-size="2.6" font-family="monospace" fill="#888" style="animation:rise 3s infinite">z</text>` +
+          `<text x="12.4" y="-1.6" font-size="2" font-family="monospace" fill="#888" style="animation:rise 3s infinite 1.5s">z</text>`,
+      }
+    case 'nod': // 点头打盹：头往下一沉，又猛地惊醒
+      return {
+        move: ['bowdown', 1.6, 'ease-in-out infinite'],
+        eyes: 'shut',
+        fx: `<text x="11" y="-0.5" font-size="2.6" fill="#999" style="animation:flipB 1.6s steps(1) infinite">!</text>`,
+      }
     case 'walk': // 散步：左右走两步，小脚交替
       return { move: ['walk', 2.5, 'ease-in-out infinite'], walking: true }
     case 'look': // 东张西望：眼睛左看右看 + 问号
@@ -571,10 +600,33 @@ function skitLook(skit: string, g: Geom): SkitLook {
   }
 }
 
+// 🌙 夜间模式
+const NIGHT_SLOW = 1.4 // 夜里动作慢 40%
+const PJ_BLUE = '#7f9cd6'
+const PJ_STRIPE = '#e3ebfb'
+const CAP = '#3f5aa6'
+
+/** 🌙 睡帽：蓝色尖帽子往右边垂下来，尖上一颗白绒球，帽子上有小星星 */
+function nightcapSvg(g: Geom): string {
+  const W = g.right - g.left + 1
+  const t = g.headTop
+  return (
+    px(g.left + 0.5, t - 1.7, W - 1, 1, CAP) +
+    px(g.left + 1.8, t - 2.5, W - 3, 0.9, CAP) +
+    px(g.right - 3, t - 3.2, 3.2, 0.8, CAP) + // 往右边倒
+    px(g.right - 0.2, t - 2.8, 1.1, 1.4, CAP) + // 垂下来的尖
+    px(g.right + 0.05, t - 1.6, 1.3, 1.3, '#ffffff') + // 绒球
+    px(g.left + 2.4, t - 1.4, 0.4, 0.4, '#ffd27a') + // 小星星
+    px(g.left + 5, t - 2.2, 0.4, 0.4, '#ffd27a') +
+    px(g.left, t - 0.8, W, 0.8, '#f4f4f4') // 白色帽边
+  )
+}
+
 /**
  * tempoMul = 动画时长倍数（设置里的速度 × 专注模式放慢）
  * skit     = 正在演的发呆小剧场（只在发呆时生效）
  * pomo     = 🍅 番茄钟阶段：focus 头顶一颗小番茄；break 手里端一杯水
+ * night    = 🌙 夜间模式：换上睡帽 + 条纹睡衣，动作变慢，旁边挂个月亮
  */
 export function clawdSvg(
   mood: Mood,
@@ -585,6 +637,7 @@ export function clawdSvg(
   tempoMul = 1,
   skit = '',
   pomo: 'idle' | 'focus' | 'break' = 'idle',
+  night = false,
 ): string {
   const isBaby = form === 'baby'
   const sprite = isBaby ? SPRITE_BABY : SPRITE_ADULT
@@ -594,7 +647,7 @@ export function clawdSvg(
   const geom: Geom = isBaby
     ? { headTop: 3, eyeTop, left: 3, right: 9 }
     : { headTop: 0, eyeTop, left: 2, right: 10 }
-  const tempo = TEMPO[form] * tempoMul
+  const tempo = TEMPO[form] * tempoMul * (night ? NIGHT_SLOW : 1)
 
   const kind: ToolKind | null = mood === 'working' ? toolKind(tool) : null
   // 小剧场只在发呆时演
@@ -632,7 +685,17 @@ export function clawdSvg(
     wear =
       itemSvg(outfit.neck, geom) +
       (kind === 'read' ? '' : itemSvg(outfit.face, geom)) +
-      `<g style="${hatTip}">${itemSvg(outfit.head, geom)}</g>`
+      (night ? '' : `<g style="${hatTip}">${itemSvg(outfit.head, geom)}</g>`)
+  }
+  // 🌙 睡衣：眼睛下面的身体换成蓝白条纹；头上戴睡帽（这时不戴头饰，免得叠在一起）
+  let pajamas = ''
+  let nightcap = ''
+  if (night) {
+    const bodyRows = sprite.map((_r, y) => y).filter(y => y > lastEyeRow)
+    pajamas =
+      rects(sprite, 'X', PJ_BLUE, { onlyRows: bodyRows }) +
+      bodyRows.map(y => rects([sprite[y] ?? ''], 'X', PJ_STRIPE, { dy: y }).replace(/height="1"/g, 'height="0.3"').replace(/y="([\d.]+)"/g, (_m, v: string) => `y="${Number(v) + 0.35}"`)).join('')
+    nightcap = nightcapSvg(geom)
   }
 
   const prop = kind ? propSvg(kind, eyeTop) : { front: '', ground: '', fx: '' }
@@ -658,6 +721,13 @@ export function clawdSvg(
 
   // 演小剧场时，平常的发呆特效（泡泡、哼小曲）先停；闪耀期的星星环绕保留
   const baseFlair = formFlair(mood, form, geom)
+  // 🌙 夜里发呆 / 睡觉时，左上角挂一弯月亮（小剧场"看月亮"自己会画）
+  if (night && (mood === 'idle' || mood === 'sleepy' || mood === 'hungry') && skit !== 'moon') {
+    baseFlair.back +=
+      `<text x="-0.8" y="-1.4" font-size="2.6" fill="#f5d76e" opacity=".85">☾</text>` +
+      px(2.4, -3, 0.4, 0.4, '#fff6c8', 'animation:fade 2.4s infinite') +
+      px(1.2, -0.6, 0.35, 0.35, '#fff6c8', 'animation:fade 2.4s infinite 1.2s')
+  }
   const isSkit = mood === 'idle' && skit !== ''
   const flair = isSkit ? { back: baseFlair.back, over: form === 'shiny' ? baseFlair.over : '' } : baseFlair
 
@@ -716,8 +786,10 @@ export function clawdSvg(
     eyeGroup +
     legA +
     legB +
+    pajamas +
     `</g>` +
     wear +
+    nightcap +
     pomoArt +
     prop.front +
     (sk.front ?? '') +

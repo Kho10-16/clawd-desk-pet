@@ -25,6 +25,7 @@ import {
   SIZE_PX,
   SKITS_BY_FORM,
   SKITS_COMMON,
+  SKITS_NIGHT,
   SPEED_MUL,
   SLOT_LABEL,
   STREAK_DOUBLE_AT,
@@ -37,6 +38,7 @@ import {
   emptyProgress,
   formOf,
   fullnessAt,
+  isNightAt,
   levelOf,
   toolKind,
   xpForLevel,
@@ -67,9 +69,9 @@ const initial: Pet = {
   pomoLeft: 0,
 }
 
-// shape 换成 pet-5：加了小剧场字段、拿掉了 frame，旧结构作废
+// shape 换成 pet-7：存档里加了 nightNagAt（夜间提醒），旧结构作废
 const pet = atom({ plugin: 'desk-pet', key: 'pet' } as const, initial, {
-  shape: 'pet-6',
+  shape: 'pet-7',
 })
 
 // 动画帧单独放：只有终端文字版会读它。
@@ -151,6 +153,8 @@ function cleanPrefs(x: Partial<Prefs>): Partial<Prefs> {
     pomoMin: num(x.pomoMin, [15, 25, 30, 45, 50], d.pomoMin),
     breakMin: num(x.breakMin, [3, 5, 10], d.breakMin),
     longBreakMin: num(x.longBreakMin, [10, 15, 20, 30], d.longBreakMin),
+    nightFrom: num(x.nightFrom, [0, 21, 22, 23, 24], d.nightFrom),
+    nightRemindMin: num(x.nightRemindMin, [0, 15, 30, 60], d.nightRemindMin),
   }
 }
 
@@ -202,14 +206,19 @@ const DEX_ACTS: { value: string; label: string }[] = [
   { value: 'work:TodoWrite', label: '📋 列计划 (TodoWrite)' },
   { value: "work:other", label: "⚙ 其他工具" },
   ...[...SKITS_COMMON, ...Object.values(SKITS_BY_FORM).flat()].map(s => ({ value: `skit:${s.id}`, label: `🎭 ${s.name}` })),
+  { value: 'night:idle', label: '🌙 夜里发呆（睡衣 + 睡帽）' },
+  { value: 'night:sleepy', label: '🌙 夜里睡觉' },
+  ...SKITS_NIGHT.map(s => ({ value: `nskit:${s.id}`, label: `🌙 ${s.name}` })),
 ]
 
 /** "work:Edit" → 心情 working + 工具 Edit；"happy" → 心情 happy */
 /** "work:Edit" → 干活 + Edit；"skit:tea" → 发呆 + 小剧场 tea；"happy" → 心情 happy */
-function parseAct(act: string): { mood: Mood; tool: string; skit: string } {
-  if (act.startsWith("work:")) return { mood: "working", tool: act.slice(5), skit: "" }
-  if (act.startsWith("skit:")) return { mood: "idle", tool: "", skit: act.slice(5) }
-  return { mood: act as Mood, tool: "", skit: "" }
+function parseAct(act: string): { mood: Mood; tool: string; skit: string; night: boolean } {
+  if (act.startsWith("work:")) return { mood: "working", tool: act.slice(5), skit: "", night: false }
+  if (act.startsWith("skit:")) return { mood: "idle", tool: "", skit: act.slice(5), night: false }
+  if (act.startsWith("nskit:")) return { mood: "idle", tool: "", skit: act.slice(6), night: true }
+  if (act.startsWith("night:")) return { mood: act.slice(6) as Mood, tool: "", skit: "", night: true }
+  return { mood: act as Mood, tool: "", skit: "", night: false }
 }
 
 async function loadProgress($: EngineInterface): Promise<Progress> {
@@ -468,9 +477,42 @@ function randomBetween(lo: number, hi: number): number {
   return lo + Math.floor(Math.random() * (hi - lo))
 }
 
-function chooseSkit(form: Form): Skit {
-  const list = [...SKITS_COMMON, ...SKITS_BY_FORM[form]]
+function chooseSkit(form: Form, night = false): Skit {
+  // 🌙 夜里：只演困困的戏（打哈欠、伸懒腰 + 夜间专属）
+  const sleepyOnes = SKITS_COMMON.filter(k => k.id === 'yawn' || k.id === 'stretch')
+  const list = night ? [...SKITS_NIGHT, ...sleepyOnes] : [...SKITS_COMMON, ...SKITS_BY_FORM[form]]
   return list[Math.floor(Math.random() * list.length)] ?? SKITS_COMMON[0]!
+}
+
+// =====================================================================
+// 🌙 夜间模式：换睡衣、动作变慢、温柔提醒你去睡觉
+// =====================================================================
+
+const NIGHT_IDLE = ['夜深了……', '月亮出来啦 🌙', '再写一点点就睡吧？', '好安静的晚上']
+const NIGHT_NAGS = [
+  '已经 {t} 了，Clawd 都打哈欠了……早点睡吧 🌙',
+  '{t} 了！剩下的明天再写也不迟～',
+  '熬夜会变熊猫眼哦 🐼（现在 {t}）',
+  'Clawd 困了……你也该休息啦（{t}）',
+]
+
+function clockText(ms: number): string {
+  const d = new Date(ms)
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+}
+
+/** 抢"这一次提醒"：多个聊天同时开着，只有先抢到的那个会提醒（存在存档里） */
+async function claimNightNag($: EngineInterface, now: number): Promise<boolean> {
+  const cur = await loadProgress($)
+  const gap = cur.prefs.nightRemindMin * 60000
+  if (gap === 0 || now - cur.nightNagAt < gap) return false
+  let got = false as boolean
+  await commit($, x => {
+    if (now - x.nightNagAt < gap) return x
+    got = true
+    return { ...x, nightNagAt: now }
+  })
+  return got
 }
 
 // =====================================================================
@@ -659,11 +701,13 @@ export const register: Register = on => {
       const p = await read($, pet)
       const seed = Math.floor(t / 1000)
 
+      const night = isNightAt(p.prefs.nightFrom, t)
+
       let { mood, moodUntil, say, skit, skitUntil, nextSkitAt } = p
       if (moodUntil !== 0 && t > moodUntil) {
         mood = 'idle'
         moodUntil = 0
-        say = pick(LINES.idle, seed)
+        say = pick(night ? NIGHT_IDLE : LINES.idle, seed)
       }
       const isHungry = fullnessAt(p, t) < HUNGRY_BELOW
       if (mood === 'idle' && isHungry) {
@@ -681,14 +725,34 @@ export const register: Register = on => {
       if (skit !== '' && (t > skitUntil || mood !== 'idle')) {
         skit = ''
         nextSkitAt = t + randomBetween(SKIT_GAP_MIN, SKIT_GAP_MAX)
-        if (mood === 'idle') say = pick(LINES.idle, seed)
+        if (mood === 'idle') say = pick(night ? NIGHT_IDLE : LINES.idle, seed)
       } else if (skit === '' && mood === 'idle' && !p.prefs.focus) {
         if (nextSkitAt === 0) nextSkitAt = t + randomBetween(SKIT_GAP_MIN, SKIT_GAP_MAX)
         else if (t >= nextSkitAt) {
-          const s = chooseSkit(formOf(levelOf(p.xp)))
+          const s = chooseSkit(formOf(levelOf(p.xp)), night)
           skit = s.id
           skitUntil = t + s.ms
           say = s.say
+        }
+      }
+
+      // 🌙 该睡觉提醒：你最近 5 分钟内还在用（真的在熬夜）才提醒；专注模式、番茄专注中不打扰
+      const nagGap = p.prefs.nightRemindMin * 60000
+      if (
+        night && nagGap > 0 && !p.prefs.focus && p.pomo.phase !== 'focus' &&
+        p.lastActive > 0 && t - p.lastActive < 5 * 60000 && t - p.nightNagAt >= nagGap &&
+        (await claimNightNag($, t))
+      ) {
+        const line = (NIGHT_NAGS[seed % NIGHT_NAGS.length] ?? NIGHT_NAGS[0]!).replace('{t}', clockText(t))
+        $.ui.toast(`Clawd：${line}`)
+        say = line
+        // 发呆的话，顺便打个大哈欠
+        if (mood === 'idle') {
+          const yawn = SKITS_COMMON.find(k => k.id === 'yawn')
+          if (yawn) {
+            skit = yawn.id
+            skitUntil = t + yawn.ms
+          }
         }
       }
 
@@ -855,7 +919,7 @@ export const register: Register = on => {
         <Text>💬 {p.say}</Text>
         <Text> </Text>
         {Svg ? (
-          <Svg source={clawdSvg(p.mood, form, isHungry, p.tool, p.outfit, tempoOf(p.prefs), p.skit, p.pomo.phase)} alt="Clawd" width={120} height={104} />
+          <Svg source={clawdSvg(p.mood, form, isHungry, p.tool, p.outfit, tempoOf(p.prefs), p.skit, p.pomo.phase, isNightAt(p.prefs.nightFrom, now))} alt="Clawd" width={120} height={104} />
         ) : (
           <Box flexDirection="column">
             <Text mono color="claude">{ABOVE[p.mood][frame % 2] || ' '}</Text>
@@ -1184,7 +1248,7 @@ export const register: Register = on => {
     const p = await loadProgress($)
     const d = await read($, dex)
     const myLv = levelOf(p.xp)
-    const { mood, tool, skit } = parseAct(d.act)
+    const { mood, tool, skit, night } = parseAct(d.act)
     const tempo = tempoOf(p.prefs)
     const setDex = (change: Partial<Dex>) => update($, dex, x => ({ ...x, ...change }))
 
@@ -1203,7 +1267,7 @@ export const register: Register = on => {
           {DEX_FORMS.map(f => (
             <Box key={`dex-form-${f.id}`} flexDirection="column" alignItems="center">
               <Svg
-                source={clawdSvg(mood, f.id, false, tool, d.outfit, tempo, skit)}
+                source={clawdSvg(mood, f.id, false, tool, d.outfit, tempo, skit, 'idle', night)}
                 alt={FORM_LABEL[f.id]}
                 width={72}
                 height={62}
@@ -1225,7 +1289,7 @@ export const register: Register = on => {
         <Text weight="bold">
           {FORM_LABEL[d.form]} · {DEX_ACTS.find(a => a.value === d.act)?.label ?? d.act}
         </Text>
-        <Svg source={clawdSvg(mood, d.form, false, tool, d.outfit, tempo, skit)} alt="Clawd 预览" width={160} height={139} />
+        <Svg source={clawdSvg(mood, d.form, false, tool, d.outfit, tempo, skit, 'idle', night)} alt="Clawd 预览" width={160} height={139} />
         <Text> </Text>
 
         <Select
@@ -1302,12 +1366,13 @@ export const register: Register = on => {
               Lv.{lv} · {MOOD_LABEL[p.mood]}
               {isHungry ? ' · 🍙 饿了' : ''}
               {p.streak > 1 ? ` · 🔥${p.streak}` : ''}
+              {isNightAt(p.prefs.nightFrom, now) ? ' · 🌙' : ''}
               {` · 📅${p.questDay === dayKey(now) ? p.questDone.filter(k => k !== ALL_DONE_MARK).length : 0}/3`}
             </Text>
           </Box>
         )}
         {Svg ? (
-          <Svg source={clawdSvg(p.mood, formOf(lv), isHungry, p.tool, p.outfit, tempoOf(p.prefs), p.skit, p.pomo.phase)} alt="Clawd" width={SIZE_PX[p.prefs.size]} height={Math.round((SIZE_PX[p.prefs.size] * 13) / 15)} />
+          <Svg source={clawdSvg(p.mood, formOf(lv), isHungry, p.tool, p.outfit, tempoOf(p.prefs), p.skit, p.pomo.phase, isNightAt(p.prefs.nightFrom, now))} alt="Clawd" width={SIZE_PX[p.prefs.size]} height={Math.round((SIZE_PX[p.prefs.size] * 13) / 15)} />
         ) : (
           <Box flexDirection="column">
             <Text mono color="claude">{row1}</Text>

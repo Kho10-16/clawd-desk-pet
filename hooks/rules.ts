@@ -134,6 +134,21 @@ export const SKITS_BY_FORM: Record<Form, Skit[]> = {
   shiny: [{ id: 'twirl', name: '闪耀登场', say: '✨ 闪亮登场！', ms: 4500 }],
 }
 
+/** 🌙 夜里才会演的（再加上打哈欠、伸懒腰） */
+export const SKITS_NIGHT: Skit[] = [
+  { id: 'moon', name: '看月亮', say: '月亮好圆……', ms: 5000 },
+  { id: 'pillow', name: '抱枕头打瞌睡', say: '抱着枕头……眼皮好重……', ms: 5500 },
+  { id: 'nod', name: '点头打盹', say: '嗯…嗯？我没睡！', ms: 4000 },
+]
+
+/** 🌙 夜间模式：nightFrom 点起到早上 6 点（24 = 半夜 12 点，0 = 关闭） */
+export const NIGHT_END_HOUR = 6
+export function isNightAt(nightFrom: number, ms: number): boolean {
+  if (nightFrom === 0) return false
+  const h = new Date(ms).getHours()
+  return h < NIGHT_END_HOUR || (nightFrom < 24 && h >= nightFrom)
+}
+
 // ---------- 装扮：成就解锁的 + 商店买的 ----------
 /** price 有值 = 商店限定，只能用金币买 */
 export type Item = { id: string; slot: Slot; name: string; hint: string; test: (p: Progress, c: Ctx) => boolean; price?: number }
@@ -188,6 +203,7 @@ export const emptyProgress: Progress = {
   questFullDays: 0,
   pomo: { phase: 'idle', endsAt: 0, round: 0, turnsAtStart: 0, prevFocus: false },
   pomoTotal: 0,
+  nightNagAt: 0,
   prefs: {
     focus: false,
     sound: true,
@@ -201,6 +217,8 @@ export const emptyProgress: Progress = {
     pomoMin: 25,
     breakMin: 5,
     longBreakMin: 15,
+    nightFrom: 23,
+    nightRemindMin: 30,
   },
 }
 
