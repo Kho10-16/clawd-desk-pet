@@ -123,4 +123,14 @@ function writeLevels(name, buf) {
   writeLevels('coin', buf)
 }
 
-console.log('已生成 sounds/ 下 achievement、done、coin 各三档音量（low / mid / high）')
+// ---------- 🔔 提醒音：叮——咚（像门铃，两个音往下走，"有人找你"的感觉） ----------
+{
+  const buf = makeBuffer(1.6)
+  const chime = [[1, 1], [2.0, 0.3], [3.0, 0.08]]
+  bell(buf, 0.0, 1318.51, { gain: 0.55, decay: 2.2, partials: chime }) // E6 叮
+  bell(buf, 0.38, 1046.5, { gain: 0.55, decay: 1.6, partials: chime }) // C6 咚
+  normalize(buf, 0.6)
+  writeLevels('nudge', buf)
+}
+
+console.log('已生成 sounds/ 下 achievement、done、coin、nudge 各三档音量（low / mid / high）')

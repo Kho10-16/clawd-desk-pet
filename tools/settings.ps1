@@ -134,6 +134,7 @@ function New-TryButton($text, $sound) {
 $tryBox.Controls.Add((New-TryButton '▶ 试听成就音' 'achievement'))
 $tryBox.Controls.Add((New-TryButton '▶ 试听完成音' 'done'))
 $tryBox.Controls.Add((New-TryButton '▶ 试听金币音' 'coin'))
+$tryBox.Controls.Add((New-TryButton '▶ 试听提醒音' 'nudge'))
 $grid.Controls.Add($tryBox)
 $grid.SetColumnSpan($tryBox, 2)
 

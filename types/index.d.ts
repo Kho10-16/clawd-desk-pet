@@ -8,6 +8,7 @@ export type Mood =
   | 'love'
   | 'hungry'
   | 'oops'
+  | 'waiting'
 
 /** 要长期保存（跨 session）的养成进度 */
 export type Progress = {

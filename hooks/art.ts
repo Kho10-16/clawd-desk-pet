@@ -44,6 +44,7 @@ export const ABOVE: Record<Mood, [string, string]> = {
   love: ['   ♡', '  ♡   ♡'],
   hungry: ['  …', '   …'],
   oops: ['  ✗', '  ✗ ~'],
+  waiting: ['  !', '  ?'],
 }
 
 export const LINES: Record<Mood, string[]> = {
@@ -56,6 +57,7 @@ export const LINES: Record<Mood, string[]> = {
   love: ['嘿嘿，好舒服', '再摸一下！', '最喜欢你了'],
   hungry: ['好饿……陪我写点代码吧', '肚子咕咕叫……', '用用 Claude Code 就能喂饱我'],
   oops: ['哎呀，搞砸了……', '冒烟了！', '再来一次！'],
+  waiting: ['Claude 在等你回复！', '快回来看看～', '有事找你！'],
 }
 
 export const MOOD_LABEL: Record<Mood, string> = {
@@ -68,6 +70,7 @@ export const MOOD_LABEL: Record<Mood, string> = {
   love: '被摸头',
   hungry: '饿了',
   oops: '出错了',
+  waiting: '等你回复',
 }
 
 // ---------- 像素版 Clawd ----------
@@ -153,6 +156,8 @@ const CSS = `
   @keyframes walk  { 0%,100% { transform: translateX(-1.5px) } 50% { transform: translateX(1.5px) } }
   @keyframes look  { 0%,100% { transform: translateX(-0.6px) } 50% { transform: translateX(0.6px) } }
   @keyframes yawnm { 0%,100% { transform: scaleY(.2) } 50% { transform: scaleY(1.3) } }
+  @keyframes flipA { 0% { opacity: 1 } 50% { opacity: .25 } }
+  @keyframes flipB { 0% { opacity: .25 } 50% { opacity: 1 } }
   @keyframes glow  { 0%,100% { filter: drop-shadow(0 0 0.3px #ffd27a) } 50% { filter: drop-shadow(0 0 1.4px #ffd27a) } }
 `
 
@@ -405,6 +410,8 @@ function bodyMove(mood: Mood, form: Form): Anim | null {
       return ['droop', 2]
     case 'oops':
       return ['shake', 0.3]
+    case 'waiting':
+      return ['hop', 0.5] // 一蹦一蹦，吸引你注意
     case 'sad':
       return null
     default:
@@ -425,6 +432,8 @@ const KIND_MOVE: Record<ToolKind, Anim> = {
 function clawMove(mood: Mood, form: Form, side: 'L' | 'R'): string {
   if (form === 'baby') return 'none'
   const half = side === 'R' ? ' .6s' : ''
+  // 等你回复：所有形态都高举钳子挥手
+  if (mood === 'waiting') return `clawhigh .5s ease-in-out infinite${side === 'R' ? ' .25s' : ''}`
   if (form === 'teen') {
     if (mood === 'idle') return `clawup 1.2s ease-in-out infinite${half}`
     if (mood === 'happy') return 'clawhigh 0.35s ease-in-out infinite'
@@ -648,6 +657,15 @@ export function clawdSvg(mood: Mood, form: Form, isThin: boolean, tool = '', out
       [0, 1, 2]
         .map(i => `<circle cx="${3.5 + i * 2.5}" cy="-0.6" r="0.8" fill="#8a8a8a" style="animation:rise 1.4s infinite ${i * 0.35}s"/>`)
         .join('') + `<text x="11" y="0" font-size="3" font-weight="bold" fill="#e5534b">✗</text>`
+  } else if (mood === 'waiting') {
+    // 🪧 举牌子：头顶一块白牌子，"!" 和 "?" 轮流出现，牌子左右晃
+    fx =
+      `<g style="transform-origin:6.5px -0.5px;animation:wiggle .6s ease-in-out infinite">` +
+      px(6.2, -2, 0.6, (isBaby ? 3 : 0) + 2, '#8b5a2b') + // 木棍：一直伸到头顶（宝宝个子矮，棍子就长一点）
+      `<rect x="3.6" y="-4" width="5.8" height="2.4" rx="0.3" fill="#fffdf5" stroke="${ORANGE}" stroke-width="0.25"/>` +
+      `<text x="5.15" y="-2.05" font-size="2.2" font-weight="bold" fill="#e5534b" style="animation:flipA 1.2s steps(1) infinite">!</text>` +
+      `<text x="6.95" y="-2.05" font-size="2.2" font-weight="bold" fill="#4a90e2" style="animation:flipB 1.2s steps(1) infinite">?</text>` +
+      `</g>`
   }
 
   const thin = isThin ? 'transform:scaleX(.82);' : '' // 饿瘦了：身体横向缩窄

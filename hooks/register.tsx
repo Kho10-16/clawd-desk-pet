@@ -187,6 +187,7 @@ const DEX_ACTS: { value: string; label: string }[] = [
   { value: 'hungry', label: '饿了' },
   { value: 'sad', label: '难过' },
   { value: 'oops', label: '出错' },
+  { value: 'waiting', label: '🪧 等你回复' },
   { value: 'work:Bash', label: '⌨️ 敲命令 (Bash)' },
   { value: 'work:Read', label: '📖 读代码 (Read)' },
   { value: 'work:Edit', label: '🔨 改代码 (Edit)' },
@@ -220,7 +221,7 @@ async function loadProgress($: EngineInterface): Promise<Progress> {
 //   其他系统：用 $.audio.play
 // =====================================================================
 
-type Sound = 'achievement' | 'done' | 'coin'
+type Sound = 'achievement' | 'done' | 'coin' | 'nudge'
 
 /** 动画时长倍数 = 设置里的速度 ×（专注模式再慢一倍） */
 function tempoOf(prefs: Prefs): number {
@@ -465,6 +466,24 @@ function chooseSkit(form: Form): Skit {
 }
 
 // =====================================================================
+// 👋 等你回复：Claude 问你问题、或者等你批准权限时，Clawd 举牌子 + 叮咚一声
+// =====================================================================
+
+/** 正在等你回复的东西：问题用 tool_use_id，权限用 "perm:工具名" */
+const waitingFor = new Set<string>()
+
+async function startWaiting($: EngineInterface, key: string, tool: string, say: string) {
+  waitingFor.add(key)
+  await setMood($, 'waiting', { tool, say })
+  if ((await loadProgress($)).prefs.sound) void playSound($, 'nudge')
+}
+
+/** 返回 true = 刚才真的有在等你（牌子举起来过） */
+function stopWaiting(key: string): boolean {
+  return waitingFor.delete(key)
+}
+
+// =====================================================================
 // 主体：接上 Claude Code 的各种事件
 // =====================================================================
 
@@ -586,15 +605,32 @@ export const register: Register = on => {
     return next(e)
   }).catch(($, e, next) => next(e)) // 桌宠出错也绝不挡住你的消息
 
+  // 👋 等你回复（startWaiting / stopWaiting 在文件上方）
+  // 权限对话框真的弹出来给你看时（自动批准的不会触发）→ 举牌子
+  on('classic.PermissionRequest', async ($, e, next) => {
+    await startWaiting($, `perm:${e.tool_name}`, e.tool_name, `Claude 在等你批准 ${e.tool_name}！`)
+    return next(e)
+  }).catch(($, e, next) => next(e))
+
   // Claude 用工具 → 专属动作；成功了才算经验
   on('tool.call', async ($, e, next) => {
-    await setMood($, 'working', { tool: e.tool, say: KIND_SAY[toolKind(e.tool)] })
+    if (e.tool === 'AskUserQuestion') {
+      // Claude 问你问题：一定要你回答，马上举牌子
+      await startWaiting($, e.tool_use_id, e.tool, 'Claude 有问题想问你！')
+    } else {
+      await setMood($, 'working', { tool: e.tool, say: KIND_SAY[toolKind(e.tool)] })
+    }
     const ran = await next(e)
+    // 工具结束了（你回答了 / 批准后跑完了 / 拒绝了）→ 放下牌子
+    const wasWaiting = stopWaiting(e.tool_use_id) || stopWaiting(`perm:${e.tool}`)
     const failed = ran.deny !== undefined || ran.isError === true
     // 📋 小账本：记下用了什么工具、改了哪个文件、有没有出错
     const filePath = (e as { file_path?: unknown }).file_path
     await logToday($, d => logTool(d, e.tool, !failed, typeof filePath === 'string' ? filePath : undefined))
-    if (failed) {
+    if (failed && wasWaiting && ran.deny !== undefined) {
+      // 你拒绝了：不是出错，别冒烟
+      await setMood($, 'sad', { holdMs: 3000, say: '好吧，那就不做了～' })
+    } else if (failed) {
       await setMood($, 'oops', { holdMs: 4000, say: `${e.tool} 冒烟了……` })
     } else {
       const isEdit = EDIT_TOOLS.includes(e.tool)
