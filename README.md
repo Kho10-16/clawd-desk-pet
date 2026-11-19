@@ -26,16 +26,16 @@ Everything runs locally. Clawd never calls the model, so it costs **0 tokens**.
 At the prompt of a Claude Code **terminal** session:
 
 ```
-/plugin install desk-pet --marketplace <owner>/clawd-desk-pet
+/plugin install desk-pet --marketplace Kho10-16/clawd-desk-pet
 ```
 
 From a shell:
 
 ```
-claude plugin install desk-pet --marketplace <owner>/clawd-desk-pet
+claude plugin install desk-pet --marketplace Kho10-16/clawd-desk-pet
 ```
 
-In the **Claude desktop app** (where `/plugin` does not run): click **+** next to the prompt box → **Plugins** → **Add marketplace** with `<owner>/clawd-desk-pet` → **Add plugin**.
+In the **Claude desktop app** (where `/plugin` does not run): click **+** next to the prompt box → **Plugins** → **Add marketplace** with `Kho10-16/clawd-desk-pet` → **Add plugin**.
 
 ## 🎮 Commands 命令
 
