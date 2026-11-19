@@ -220,6 +220,7 @@ export const emptyProgress: Progress = {
     nightFrom: 23,
     nightRemindMin: 30,
     island: true,
+    petWhere: 'desktop',
   },
 }
 

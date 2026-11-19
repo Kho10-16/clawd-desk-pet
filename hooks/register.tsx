@@ -4,7 +4,7 @@ import type { Register, EngineInterface } from 'claude-code'
 import type { Dex, Mood, Pet, Pomo, Prefs, Progress, Slot, WeekView } from '../types'
 import { buildWeek, loadDays, loadToday, logProject, logToday, logTool, top, weekMarkdown } from './report'
 import { ALL_DONE_COINS, ALL_DONE_MARK, ALL_DONE_XP, questsFor } from './quests'
-import { ABOVE, LINES, MOOD_LABEL, clawdSvg, clawdText } from './art'
+import { ABOVE, LINES, MOOD_LABEL, clawdSvg, clawdText, svgShapes } from './art'
 import {
   BADGES,
   COIN_BADGE,
@@ -166,6 +166,7 @@ function cleanPrefs(x: Partial<Prefs>): Partial<Prefs> {
     nightFrom: num(x.nightFrom, [0, 21, 22, 23, 24], d.nightFrom),
     nightRemindMin: num(x.nightRemindMin, [0, 15, 30, 60], d.nightRemindMin),
     island: typeof x.island === 'boolean' ? x.island : d.island,
+    petWhere: pickOne(x.petWhere, ['desktop', 'chat'] as const, d.petWhere),
   }
 }
 
@@ -799,7 +800,7 @@ async function writeHubState($: EngineInterface, force = false) {
   await $.fs.write(hubStatePath, `{"now":${now},${body.slice(1)}`)
 }
 
-type HubAction = { type?: unknown; id?: unknown; what?: unknown; page?: unknown; form?: unknown; act?: unknown; slot?: unknown; offset?: unknown; prefs?: unknown }
+type HubAction = { type?: unknown; id?: unknown; what?: unknown; page?: unknown; form?: unknown; act?: unknown; slot?: unknown; offset?: unknown; prefs?: unknown; where?: unknown }
 const SOUNDS: Sound[] = ['achievement', 'done', 'coin', 'nudge']
 
 /** 窗口里按了按钮 → 照做（和 /pet 面板用同一套函数） */
@@ -893,8 +894,18 @@ async function hubAction($: EngineInterface, a: HubAction) {
     }
     case 'island-off':
       await commit($, x => ({ ...x, prefs: { ...x.prefs, island: false } }))
-      await stopIsland($)
+      await stopOverlay($, island)
       $.ui.toast('Clawd：灵动岛藏起来了（设置里可以再打开）')
+      break
+    case 'pet-where': {
+      const where = a.where === 'chat' ? 'chat' : 'desktop'
+      await commit($, x => ({ ...x, prefs: { ...x.prefs, petWhere: where } }))
+      if (where === 'chat') $.ui.toast('Clawd：回到聊天框上方啦（设置里可以再放到桌面）')
+      break
+    }
+    case 'pomo-toggle':
+      if ((await loadProgress($)).pomo.phase === 'focus') await stopPomo($)
+      else await startPomo($)
       break
     case 'open':
       if (a.what === 'hub') void openHub($)
@@ -974,60 +985,56 @@ async function openHub($: EngineInterface): Promise<'opened' | 'reopened' | 'uns
 }
 
 // =====================================================================
-// ⚫ 桌面灵动岛：屏幕顶部的小黑岛（tools/island.ps1）
-//   Clawd → 岛：一小份状态写进 island-state.json（变了才写）
-//   岛 → Clawd：按钮印 CLAWD_ACTION:{...}，和 Clawd 中心用同一个 hubAction()
-//   好几个聊天同时开着：岛那边有一把锁，只有第一个能开；其他的每 2 分钟再试一次
+// 🖥 桌面上的小窗口：⚫ 灵动岛（tools/island.ps1）和 🦀 桌面桌宠（tools/pet.ps1）
+//   Clawd → 窗口：一小份状态写进 <名字>-state.json（变了才写；{quit:true} = 请它自己关）
+//   窗口 → Clawd：按钮印 CLAWD_ACTION:{...}，和 Clawd 中心用同一个 hubAction()
+//   好几个聊天同时开着：窗口那边有一把锁，只有第一个能开；其他的每 2 分钟再试一次
 // =====================================================================
 
-let islandRunning = false
-let islandPath = ''
-let islandLast = ''
-let islandTriedAt = 0
-let islandChild: ReturnType<EngineInterface['process']['spawn']> | null = null
+type Overlay = {
+  name: string
+  script: string
+  running: boolean
+  path: string
+  last: string
+  triedAt: number
+  wanted: boolean
+  child: ReturnType<EngineInterface['process']['spawn']> | null
+}
+const newOverlay = (name: string, script: string): Overlay => ({
+  name, script, running: false, path: '', last: '', triedAt: 0, wanted: false, child: null,
+})
+const island = newOverlay('island', 'island.ps1')
+const desk = newOverlay('pet', 'pet.ps1')
+let isWindows = false
 
-async function writeIslandState($: EngineInterface, extra: Record<string, unknown> = {}) {
-  if (islandPath === '') return
-  const p = await read($, pet)
-  const now = await $.clock.now()
-  const lv = levelOf(p.xp)
-  const body = JSON.stringify({
-    mood: p.mood,
-    moodLabel: MOOD_LABEL[p.mood],
-    say: p.say,
-    lv,
-    form: formOf(lv),
-    pomo: {
-      phase: p.pomo.phase,
-      endsAt: p.pomo.endsAt,
-      wholeMs: (p.pomo.phase === 'break' ? (p.pomo.round === 0 ? p.prefs.longBreakMin : p.prefs.breakMin) : p.prefs.pomoMin) * 60000,
-    },
-    ...extra,
-  })
-  if (body === islandLast) return
-  islandLast = body
-  await $.fs.write(islandPath, `{"now":${now},${body.slice(1)}`)
+/** 内容变了才写文件（now 不算在"有没有变"里面） */
+async function writeOverlay($: EngineInterface, o: Overlay, data: Record<string, unknown>) {
+  if (o.path === '') return
+  const body = JSON.stringify(data)
+  if (body === o.last) return
+  o.last = body
+  await $.fs.write(o.path, `{"now":${await $.clock.now()},${body.slice(1)}`)
 }
 
-async function startIsland($: EngineInterface) {
-  if (islandRunning) return
-  islandTriedAt = await $.clock.now()
-  const { platform } = await $.session.info()
-  if (platform !== 'windows') return
+async function startOverlay($: EngineInterface, o: Overlay, first: Record<string, unknown>) {
+  if (o.running) return
+  o.triedAt = await $.clock.now()
+  if (!isWindows) return
   const data = (await $.process.hookEnv()).CLAUDE_PLUGIN_DATA ?? ''
   if (data === '') return
-  islandPath = `${data}${data.includes('\\') ? '\\' : '/'}island-state.json`
-  islandLast = ''
-  islandRunning = true
-  await writeIslandState($)
+  o.path = `${data}${data.includes('\\') ? '\\' : '/'}${o.name}-state.json`
+  o.last = ''
+  o.running = true
+  await writeOverlay($, o, first)
   const root = $.plugin.root.replace(/\//g, '\\')
   void (async () => {
     let buf = ''
     try {
       const child = $.process.spawn({
-        argv: ['powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-STA', '-File', `${root}\\tools\\island.ps1`, '-State', islandPath],
+        argv: ['powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-STA', '-File', `${root}\\tools\\${o.script}`, '-State', o.path],
       })
-      islandChild = child
+      o.child = child
       for await (const piece of child) {
         if (piece.stream !== 'stdout') continue
         buf += piece.text
@@ -1035,7 +1042,7 @@ async function startIsland($: EngineInterface) {
         while (nl >= 0) {
           const line = buf.slice(0, nl).trim()
           buf = buf.slice(nl + 1)
-          if (line === 'CLAWD_ISLAND_BUSY') break // 别的聊天已经开了一颗
+          if (line.endsWith('_BUSY')) break // 别的聊天已经开了一个
           if (line.startsWith('CLAWD_ACTION:')) {
             try {
               await hubAction($, JSON.parse(line.slice('CLAWD_ACTION:'.length)) as HubAction)
@@ -1047,26 +1054,71 @@ async function startIsland($: EngineInterface) {
         }
       }
     } catch {
-      // 岛关掉了 / 没开成：心跳过一阵会再试
+      // 窗口关掉了 / 没开成：心跳过一阵会再试
     } finally {
-      islandRunning = false
-      islandChild = null
+      o.running = false
+      o.child = null
     }
   })()
 }
 
-async function stopIsland($: EngineInterface) {
-  if (!islandRunning) return
+async function stopOverlay($: EngineInterface, o: Overlay) {
+  if (!o.running) return
   try {
-    await writeIslandState($, { quit: true }) // 先请它自己关
+    await writeOverlay($, o, { quit: true }) // 先请它自己关
   } catch {
     // 写不进去也没关系，下面直接结束它
   }
   try {
-    void islandChild?.return(undefined as never)
+    void o.child?.return(undefined as never)
   } catch {
     // 已经关了
   }
+}
+
+/** 心跳里调用：设置说要开就保持它活着，说不要就关掉 */
+async function keepOverlay($: EngineInterface, o: Overlay, want: boolean, now: number, data: () => Record<string, unknown>) {
+  if (want && !o.running && (o.triedAt === 0 || now - o.triedAt > 120000 || !o.wanted)) await startOverlay($, o, data())
+  else if (!want && o.running) await stopOverlay($, o)
+  o.wanted = want
+  if (o.running) await writeOverlay($, o, data())
+}
+
+function islandData(p: Pet): Record<string, unknown> {
+  const lv = levelOf(p.xp)
+  return {
+    mood: p.mood,
+    moodLabel: MOOD_LABEL[p.mood],
+    say: p.say,
+    lv,
+    form: formOf(lv),
+    pomo: {
+      phase: p.pomo.phase,
+      endsAt: p.pomo.endsAt,
+      wholeMs: (p.pomo.phase === 'break' ? (p.pomo.round === 0 ? p.prefs.longBreakMin : p.prefs.breakMin) : p.prefs.pomoMin) * 60000,
+    },
+  }
+}
+
+/** 桌面桌宠：和聊天框上方那只同一张像素画，拆成形状清单 */
+const DESK_UNIT: Record<Prefs['size'], number> = { small: 6, medium: 8, large: 11 }
+function deskData(p: Pet, now: number): Record<string, unknown> {
+  const lv = levelOf(p.xp)
+  const isHungry = fullnessAt(p, now) < HUNGRY_BELOW
+  const night = isNightAt(p.prefs.nightFrom, now)
+  return {
+    mood: p.mood,
+    say: p.say,
+    showText: p.prefs.showText && !p.prefs.focus,
+    unit: DESK_UNIT[p.prefs.size],
+    tempo: tempoOf(p.prefs),
+    shapes: svgShapes(clawdSvg(p.mood, formOf(lv), isHungry, p.tool, p.outfit, tempoOf(p.prefs), p.skit, p.pomo.phase, night)),
+  }
+}
+
+/** 桌宠这次显示在哪：桌面窗口只有 Windows 有，其他系统一律在聊天框上方 */
+function petOnDesktop(prefs: Prefs): boolean {
+  return isWindows && prefs.petWhere === 'desktop'
 }
 
 // =====================================================================
@@ -1099,6 +1151,7 @@ export const register: Register = on => {
       if (old?.pets) await $.store.set(STORE_KEY, { ...emptyProgress, pets: old.pets })
     }
     const now = await $.clock.now()
+    isWindows = (await $.session.info()).platform === 'windows'
     await sync($)
     await update($, pet, p => ({ ...p, lastActive: p.lastActive || now }))
 
@@ -1113,7 +1166,6 @@ export const register: Register = on => {
 
     // 心跳：每 0.7 秒检查一次心情过期、肚子饿、睡觉、要不要演小剧场；约每 7 秒从存档同步一次
     let ticks = 0
-    let lastWantIsland = true
     $.clock.every(700, async () => {
       ticks++
       await update($, frameAtom, f => (f + 1) % 1000) // 只有终端文字版读它
@@ -1196,12 +1248,10 @@ export const register: Register = on => {
       // 🫧 Clawd 中心开着的话，把最新状态写给它（没变就不写）
       if (hubOpen) await writeHubState($)
 
-      // ⚫ 灵动岛：设置开着就保持它活着（别的聊天开了的话，2 分钟后再试）；关了就收起来
-      const wantIsland = p.prefs.island
-      if (wantIsland && !islandRunning && (islandTriedAt === 0 || t - islandTriedAt > 120000 || !lastWantIsland)) await startIsland($)
-      else if (!wantIsland && islandRunning) await stopIsland($)
-      lastWantIsland = wantIsland
-      if (islandRunning) await writeIslandState($)
+      // ⚫ 灵动岛 / 🦀 桌面桌宠：设置开着就保持它们活着（别的聊天开了的话，2 分钟后再试）；关了就收起来
+      const q = await read($, pet)
+      await keepOverlay($, island, q.prefs.island, t, () => islandData(q))
+      await keepOverlay($, desk, petOnDesktop(q.prefs), t, () => deskData(q, t))
     })
 
     return next(e)
@@ -1770,6 +1820,8 @@ export const register: Register = on => {
     if (e.props.hasSurvey) {
       return next(e)
     }
+    const p0 = await read($, pet)
+    if (petOnDesktop(p0.prefs)) return next(e) // 桌宠住在桌面上了
     const els = $.ui.resolve(e)
     const { Box, Text } = els
     const Svg = 'Svg' in els ? els.Svg : undefined
@@ -1793,12 +1845,14 @@ export const register: Register = on => {
           <Text size="caption" dimColor>🤫</Text>
         ) : !p.prefs.showText ? null : (
           <Box flexDirection="column" alignItems="flex-end">
-            <Text size="footnote">
-              <Text dimColor>{p.say} </Text>
-              <Text color="claude">{deco.trim()}</Text>
-            </Text>
+            {/* 对话泡泡 */}
+            <Box borderStyle="round" borderDimColor paddingX={1}>
+              <Text size="footnote">
+                {p.say} <Text color="claude">{deco.trim()}</Text>
+              </Text>
+            </Box>
             <Text size="caption" dimColor>
-              Lv.{lv} · {MOOD_LABEL[p.mood]}
+              {MOOD_LABEL[p.mood]}
               {isHungry ? ' · 🍙 饿了' : ''}
               {p.streak > 1 ? ` · 🔥${p.streak}` : ''}
               {isNightAt(p.prefs.nightFrom, now) ? ' · 🌙' : ''}

@@ -800,3 +800,32 @@ export function clawdSvg(
     `</svg>`
   )
 }
+
+/**
+ * 🖥 桌面桌宠用：把 clawdSvg() 画好的 SVG 拆成一行一个的形状，桌面窗口（tools/pet.ps1）照着画。
+ * 就像把一幅十字绣拆成"第几行第几格涂什么颜色"的清单。动画不带过去，桌面那边自己加动作。
+ *   r|x|y|w|h|填色|透明度|圆角      c|cx|cy|rx|ry|填色|描边|描边宽|透明度
+ *   l|x1|y1|x2|y2|描边|宽          t|x|y|字号|颜色|粗体|文字
+ */
+export function svgShapes(svg: string): string {
+  const out: string[] = []
+  const body = svg.replace(/<style>[\s\S]*?<\/style>/, '')
+  const re = /<(rect|circle|ellipse|line|text)\b([^>]*)>(?:([^<]*)<\/text>)?/g
+  const num = (v: string | undefined, d = 0) => (v === undefined || v === '' || isNaN(Number(v)) ? d : Number(v))
+  let m: RegExpExecArray | null
+  while ((m = re.exec(body))) {
+    const tag = m[1]
+    const a: Record<string, string> = {}
+    for (const [, k, v] of (m[2] ?? '').matchAll(/([\w-]+)="([^"]*)"/g)) if (k) a[k] = v ?? ''
+    const op = num(a.opacity, 1)
+    if (tag === 'rect') out.push(['r', num(a.x), num(a.y), num(a.width), num(a.height), a.fill ?? '#000', op, num(a.rx)].join('|'))
+    else if (tag === 'circle') out.push(['c', num(a.cx), num(a.cy), num(a.r), num(a.r), a.fill ?? '#000', a.stroke ?? 'none', num(a['stroke-width'], 0.1), op].join('|'))
+    else if (tag === 'ellipse') out.push(['c', num(a.cx), num(a.cy), num(a.rx), num(a.ry), a.fill ?? '#000', a.stroke ?? 'none', num(a['stroke-width'], 0.1), op].join('|'))
+    else if (tag === 'line') out.push(['l', num(a.x1), num(a.y1), num(a.x2), num(a.y2), a.stroke ?? '#000', num(a['stroke-width'], 0.1)].join('|'))
+    else {
+      const text = (m[3] ?? '').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&').replace(/[|\n]/g, ' ')
+      if (text.trim()) out.push(['t', num(a.x), num(a.y), num(a['font-size'], 2), a.fill ?? '#000', a['font-weight'] === 'bold' ? 1 : 0, text].join('|'))
+    }
+  }
+  return out.join('\n')
+}

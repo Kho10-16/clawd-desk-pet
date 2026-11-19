@@ -7,6 +7,8 @@ Clawd watches what Claude is doing and reacts: it types on a tiny keyboard when 
 
 ## ✨ Features 功能
 
+- **Desktop pet 桌面桌宠** 🦀：Clawd lives on your desktop and talks in speech bubbles. Drag it anywhere (it remembers the spot), click to pat, double-click to open the hub, right-click for a menu. Same pixel art as in Claude, outfits and pajamas included. Prefer the old spot? Set 桌宠住在哪 → 聊天框上方
+
 - **Clawd hub Clawd 中心** 🫧：a Liquid Glass window outside Claude (`/clawd-hub`) with everything in one place: home, daily quests, pomodoro, shop, wardrobe, badges, gallery, weekly report and settings. Buttons work live; changes sync to every chat
 - **Desktop Dynamic Island 桌面灵动岛** ⚫：a black pill at the top of your screen showing Clawd, its mood and the pomodoro countdown. Click to expand it for controls; it pops open on its own when Claude is waiting for you
 
@@ -58,6 +60,8 @@ In the **Claude desktop app** (where `/plugin` does not run): click **+** next t
 
 Panel hotkeys: `p` pat · `f` snack · `w` wake · `d` gallery · `r` weekly report · `s` settings window · `t` pomodoro · `h` Clawd hub
 
+Desktop pet: drag to move · click to pat · double-click for the hub · right-click for a menu (snack, pomodoro, put it back above the chat box).
+
 The Dynamic Island starts by itself; turn it off under 专注与打扰 in settings, or right-click it → 隐藏灵动岛.
 
 ## 🛠 Customize 自己改
@@ -73,12 +77,13 @@ The Dynamic Island starts by itself; turn it off under 专注与打扰 in settin
 | `tools/settings-mac.js` | The macOS settings window 设置窗口 (macOS) |
 | `tools/hub.ps1` + `tools/hub/index.html` | The Clawd hub: a tiny local server and the Liquid Glass page Clawd 中心 |
 | `tools/island.ps1` | The desktop Dynamic Island 桌面灵动岛 |
+| `tools/pet.ps1` | The draggable desktop pet 桌面桌宠 |
 | `tools/make-sounds.mjs` | Synthesizes the original sound effects — run `node tools/make-sounds.mjs` 合成原创音效 |
 
 ## 📝 Notes
 
 - The settings window works on Windows (`tools/settings.ps1`) and macOS (`tools/settings-mac.js`, a native Cocoa window run by the built-in `osascript`). The macOS version is new and has not been tested on a real Mac yet; feedback welcome.
-- The Clawd hub and the Dynamic Island are Windows-only for now. The hub opens in Microsoft Edge's app mode with its own profile, served only on `127.0.0.1` with a random per-launch token.
+- The Clawd hub, the Dynamic Island and the desktop pet are Windows-only for now; on other systems Clawd stays above the chat box. The hub opens in Microsoft Edge's app mode with its own profile, served only on `127.0.0.1` with a random per-launch token.
 - Sounds play through PowerShell on Windows (Claude Code's own audio player is silent there) and through Claude Code elsewhere.
 - Clawd's look is inspired by the Claude Code mascot; this is an unofficial fan project, not affiliated with Anthropic.
 - The weekly report data stays on your computer. Saved reports go to `reports/`, which is git-ignored.

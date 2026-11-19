@@ -98,6 +98,8 @@ export type Prefs = {
   nightRemindMin: number
   /** ⚫ 桌面灵动岛：屏幕顶部的小黑岛（Windows） */
   island: boolean
+  /** 🦀 桌宠住在哪：desktop = 桌面上可以拖的窗口（Windows）；chat = 聊天框上方 */
+  petWhere: 'desktop' | 'chat'
 }
 
 /** 周报面板的状态 */

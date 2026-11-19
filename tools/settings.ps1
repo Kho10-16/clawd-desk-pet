@@ -401,7 +401,7 @@ $defaults = [ordered]@{
   focus = $false; sound = $true; volume = 'mid'; longTaskSec = 30; sleepMin = 2
   speed = 'normal'; showText = $true; size = 'medium'; internStart = ''
   pomoMin = 25; breakMin = 5; longBreakMin = 15
-  nightFrom = 23; nightRemindMin = 30; island = $true
+  nightFrom = 23; nightRemindMin = 30; island = $true; petWhere = 'desktop'
 }
 function Get-Pref($name) {
   if ($cur.PSObject.Properties.Name -contains $name) { return $cur.$name }
@@ -414,6 +414,7 @@ $longOpts   = @(@('10 秒', 10), @('30 秒', 30), @('1 分钟', 60), @('2 分钟
 $sleepOpts  = @(@('1 分钟', 1), @('2 分钟', 2), @('5 分钟', 5), @('10 分钟', 10), @('永远不睡', 0))
 $speedOpts  = @(@('慢', 'slow'), @('正常', 'normal'), @('快', 'fast'))
 $sizeOpts   = @(@('小', 'small'), @('中', 'medium'), @('大', 'large'))
+$whereOpts  = @(@('桌面（可以拖动）', 'desktop'), @('聊天框上方', 'chat'))
 $pomoOpts   = @(@('15 分钟', 15), @('25 分钟', 25), @('30 分钟', 30), @('45 分钟', 45), @('50 分钟', 50))
 $breakOpts  = @(@('3 分钟', 3), @('5 分钟', 5), @('10 分钟', 10))
 $longOpts2  = @(@('10 分钟', 10), @('15 分钟', 15), @('20 分钟', 20), @('30 分钟', 30))
@@ -500,8 +501,9 @@ $pgSound.AddNote('声音都是 Clawd 自己合成的，不会用到网络。')
 
 $pgLook = New-Page 'Clawd 的样子' '外观' ([string][char]0xE771) 255 149 0
 $c = $pgLook.AddCard()
+$where = New-Picker $whereOpts (Get-Pref 'petWhere'); $c.AddRow('桌宠住在哪', '桌面上可以随便拖；聊天框上方跟着 Claude', $where)
 $speed = New-Picker $speedOpts (Get-Pref 'speed');    $c.AddRow('动画速度', '', $speed)
-$size  = New-Picker $sizeOpts (Get-Pref 'size');      $c.AddRow('聊天框上方的大小', '', $size)
+$size  = New-Picker $sizeOpts (Get-Pref 'size');      $c.AddRow('Clawd 的大小', '', $size)
 $sleep = New-Picker $sleepOpts (Get-Pref 'sleepMin'); $c.AddRow('多久没动静就睡觉', '', $sleep)
 
 $pgPomo = New-Page '番茄钟' '番茄钟' ([string][char]0xE916) 255 59 48
@@ -548,6 +550,7 @@ $reset.Add_Click({
   Set-Combo $volume $defaults.volume
   Set-Combo $long $defaults.longTaskSec
   Set-Combo $speed $defaults.speed
+  Set-Combo $where $defaults.petWhere
   Set-Combo $size $defaults.size
   Set-Combo $sleep $defaults.sleepMin
   Set-Combo $pomoMin $defaults.pomoMin
@@ -573,6 +576,7 @@ $doSave = {
     longTaskSec = [int](Get-ComboValue $long)
     sleepMin    = [int](Get-ComboValue $sleep)
     speed       = Get-ComboValue $speed
+    petWhere    = Get-ComboValue $where
     showText    = $showText.Checked
     island      = $islandT.Checked
     size        = Get-ComboValue $size

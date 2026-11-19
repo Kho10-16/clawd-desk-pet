@@ -20,6 +20,7 @@ const DEFAULTS = {
   pomoMin: 25, breakMin: 5, longBreakMin: 15,
   nightFrom: 23, nightRemindMin: 30,
   island: true, // 灵动岛目前只有 Windows 版，这里只是原样带回去
+  petWhere: 'desktop', // 桌面桌宠目前只有 Windows 版；Mac 上 Clawd 一律在聊天框上方
 }
 
 // 下拉选单的选项：[显示的字, 存起来的值]

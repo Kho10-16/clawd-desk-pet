@@ -412,8 +412,9 @@ const VIEWS = {
       </div>
       <h2>外观</h2>
       <div class="glass rows">
+        ${row('桌宠住在哪', '桌面上可以随便拖；聊天框上方跟着 Claude', seg('petWhere', [['桌面', 'desktop'], ['聊天框上方', 'chat']]))}
         ${row('动画速度', '', seg('speed', [['慢', 'slow'], ['正常', 'normal'], ['快', 'fast']]))}
-        ${row('聊天框上方的大小', '', seg('size', [['小', 'small'], ['中', 'medium'], ['大', 'large']]))}
+        ${row('Clawd 的大小', '', seg('size', [['小', 'small'], ['中', 'medium'], ['大', 'large']]))}
         ${row('多久没动静就睡觉', '', pick('sleepMin', [['1 分钟', 1], ['2 分钟', 2], ['5 分钟', 5], ['10 分钟', 10], ['永远不睡', 0]]))}
       </div>
       <h2>番茄钟</h2>
