@@ -1,0 +1,1074 @@
+﻿import { atom, read, update } from 'claude-code'
+import type { Register, EngineInterface } from 'claude-code'
+
+import type { Dex, Mood, Pet, Prefs, Progress, Slot, WeekView } from '../types'
+import { buildWeek, loadDays, logProject, logToday, logTool, top, weekMarkdown } from './report'
+import { ABOVE, LINES, MOOD_LABEL, clawdSvg, clawdText } from './art'
+import {
+  BADGES,
+  COIN_BADGE,
+  COIN_DAILY,
+  COIN_LEVEL,
+  COIN_TOOL,
+  COIN_TURN,
+  FOODS,
+  EDIT_TOOLS,
+  FOOD_TOOL,
+  FOOD_TURN,
+  FORM_LABEL,
+  FORM_NEXT,
+  HUNGRY_BELOW,
+  ITEMS,
+  KIND_SAY,
+  SIZE_PX,
+  SKITS_BY_FORM,
+  SKITS_COMMON,
+  SPEED_MUL,
+  SLOT_LABEL,
+  STREAK_DOUBLE_AT,
+  XP_DAILY,
+  XP_EDIT,
+  XP_TOOL,
+  XP_TURN,
+  dayKey,
+  emptyProgress,
+  formOf,
+  fullnessAt,
+  levelOf,
+  toolKind,
+  xpForLevel,
+} from './rules'
+import type { Ctx, Food, Form, Skit } from './rules'
+
+const PANE = 'desk-pet'
+const TITLE = 'Clawd'
+const STORE_KEY = 'progress-v2'
+const SLOTS: Slot[] = ['head', 'face', 'neck']
+
+// =====================================================================
+// 状态
+//   $.store  = 长期存档，所有聊天共用，是"唯一真相"
+//   pet atom = 这个聊天里的镜像 + 心情、动画帧这些临时状态
+// =====================================================================
+
+const initial: Pet = {
+  ...emptyProgress,
+  mood: 'idle',
+  moodUntil: 0,
+  lastActive: 0,
+  tool: '',
+  say: '嗨！我是 Clawd',
+  skit: '',
+  skitUntil: 0,
+  nextSkitAt: 0,
+}
+
+// shape 换成 pet-5：加了小剧场字段、拿掉了 frame，旧结构作废
+const pet = atom({ plugin: 'desk-pet', key: 'pet' } as const, initial, {
+  shape: 'pet-5',
+})
+
+// 动画帧单独放：只有终端文字版会读它。
+// 如果放在 pet 里，每 0.7 秒一变，所有面板都会重画 → 滚动条被弹回顶部。
+const frameAtom = atom({ plugin: 'desk-pet', key: 'frame' } as const, 0)
+
+// ---------- 📋 周报面板 ----------
+const WEEK_PANE = 'desk-pet-week'
+const weekView = atom(
+  { plugin: 'desk-pet', key: 'week' } as const,
+  { offset: 0, note: '', refresh: 0 } as WeekView,
+  { shape: 'week-1' },
+)
+
+/** Windows：用 PowerShell 把文字放进剪贴板（文字从 stdin 传进去，不会被当成命令） */
+async function copyToClipboard($: EngineInterface, text: string): Promise<boolean> {
+  try {
+    const { platform } = await $.session.info()
+    if (platform !== 'windows') return false
+    const r = await $.process.run(
+      ['powershell.exe', '-NoProfile', '-NonInteractive', '-Command', '[Console]::InputEncoding=[Text.Encoding]::UTF8; $input | Out-String | Set-Clipboard'],
+      { stdin: text, timeoutMs: 10000 },
+    )
+    return r.exitCode === 0
+  } catch {
+    return false
+  }
+}
+
+// ---------- 📖 图鉴：只是预览，不会解锁 ----------
+const DEX_PANE = 'desk-pet-dex'
+const dex = atom(
+  { plugin: 'desk-pet', key: 'dex' } as const,
+  { form: 'baby', act: 'idle', outfit: { head: '', face: '', neck: '' } } as Dex,
+  { shape: 'dex-1' },
+)
+
+const DEX_FORMS: { id: Form; unlockLv: number }[] = [
+  { id: 'baby', unlockLv: 1 },
+  { id: 'teen', unlockLv: 5 },
+  { id: 'gent', unlockLv: 10 },
+  { id: 'shiny', unlockLv: 20 },
+]
+
+/** 图鉴里能预览的动作：心情 + 每种工具的专属动作 */
+const DEX_ACTS: { value: string; label: string }[] = [
+  { value: 'idle', label: '发呆' },
+  { value: 'thinking', label: '思考' },
+  { value: 'happy', label: '开心' },
+  { value: 'love', label: '被摸头' },
+  { value: 'sleepy', label: '睡觉' },
+  { value: 'hungry', label: '饿了' },
+  { value: 'sad', label: '难过' },
+  { value: 'oops', label: '出错' },
+  { value: 'work:Bash', label: '⌨️ 敲命令 (Bash)' },
+  { value: 'work:Read', label: '📖 读代码 (Read)' },
+  { value: 'work:Edit', label: '🔨 改代码 (Edit)' },
+  { value: 'work:WebSearch', label: '🔭 上网查 (WebSearch)' },
+  { value: 'work:TodoWrite', label: '📋 列计划 (TodoWrite)' },
+  { value: "work:other", label: "⚙ 其他工具" },
+  ...[...SKITS_COMMON, ...Object.values(SKITS_BY_FORM).flat()].map(s => ({ value: `skit:${s.id}`, label: `🎭 ${s.name}` })),
+]
+
+/** "work:Edit" → 心情 working + 工具 Edit；"happy" → 心情 happy */
+/** "work:Edit" → 干活 + Edit；"skit:tea" → 发呆 + 小剧场 tea；"happy" → 心情 happy */
+function parseAct(act: string): { mood: Mood; tool: string; skit: string } {
+  if (act.startsWith("work:")) return { mood: "working", tool: act.slice(5), skit: "" }
+  if (act.startsWith("skit:")) return { mood: "idle", tool: "", skit: act.slice(5) }
+  return { mood: act as Mood, tool: "", skit: "" }
+}
+
+async function loadProgress($: EngineInterface): Promise<Progress> {
+  const saved = (await $.store.get(STORE_KEY)) as Partial<Progress> | undefined
+  return {
+    ...emptyProgress,
+    ...saved,
+    outfit: { ...emptyProgress.outfit, ...saved?.outfit },
+    prefs: { ...emptyProgress.prefs, ...saved?.prefs },
+  }
+}
+
+// =====================================================================
+// 提示音
+//   Windows：用系统自带的 PowerShell 播放（$.audio 在 Windows 上没有播放器）
+//   其他系统：用 $.audio.play
+// =====================================================================
+
+type Sound = 'achievement' | 'done' | 'coin'
+
+/** 动画时长倍数 = 设置里的速度 ×（专注模式再慢一倍） */
+function tempoOf(prefs: Prefs): number {
+  return SPEED_MUL[prefs.speed] * (prefs.focus ? 2 : 1)
+}
+
+async function playSound($: EngineInterface, sound: Sound) {
+  try {
+    const { volume } = (await loadProgress($)).prefs
+    const name = `${sound}-${volume}.wav` // 每个声音都有 low / mid / high 三个文件
+    const { platform } = await $.session.info()
+    if (platform === 'windows') {
+      const file = `${$.plugin.root}\\sounds\\${name}`.replace(/\//g, '\\').replace(/'/g, "''")
+      await $.process.run(
+        ['powershell.exe', '-NoProfile', '-NonInteractive', '-Command', `(New-Object Media.SoundPlayer '${file}').PlaySync()`],
+        { timeoutMs: 10000 },
+      )
+    } else {
+      await $.audio.play({ asset: `sounds/${name}` })
+    }
+  } catch {
+    // 放不出声音也没关系，别影响 Claude 干活
+  }
+}
+
+/**
+ * 修改长期存档的唯一入口：
+ *   1. 先读存档里最新的值（别的聊天可能刚改过）
+ *   2. 在它上面做修改
+ *   3. 检查升级 / 徽章 / 新装扮
+ *   4. 写回存档，并同步到这个聊天的画面
+ * 这样多个聊天同时开着，也是在同一份进度上"累加"，不会互相覆盖。
+ */
+async function commit(
+  $: EngineInterface,
+  change: (s: Progress, now: number) => Progress,
+  opts: { isUse?: boolean } = {},
+): Promise<number> {
+  const now = await $.clock.now()
+  const d = new Date(now)
+  const ctx: Ctx = { hour: d.getHours(), month: d.getMonth() + 1, isUse: opts.isUse ?? false }
+
+  const before = await loadProgress($)
+  const after = change(before, now)
+  const news: string[] = []
+
+  // 升级 / 进化
+  const lb = levelOf(before.xp)
+  const la = levelOf(after.xp)
+  if (la > lb) {
+    const f = formOf(la)
+    news.push(f !== formOf(lb) ? `进化啦！Lv.${la} ${FORM_LABEL[f]} 🎉` : `升级啦！Lv.${la} 🎉`)
+    after.coins += la * COIN_LEVEL // 升级奖励金币
+  }
+
+  // 徽章
+  const newBadges = BADGES.filter(b => !after.badges.includes(b.id) && b.test(after, ctx))
+  if (newBadges.length > 0) {
+    after.badges = [...after.badges, ...newBadges.map(b => b.id)]
+    for (const b of newBadges) news.push(`🏅 解锁徽章「${b.name}」`)
+    after.coins += newBadges.length * COIN_BADGE // 每枚徽章奖励金币
+  }
+
+  // 装扮（放在徽章后面，因为"金牌"要看徽章数量）
+  const newItems = ITEMS.filter(i => !after.wardrobe.includes(i.id) && i.test(after, ctx))
+  if (newItems.length > 0) {
+    after.wardrobe = [...after.wardrobe, ...newItems.map(i => i.id)]
+    for (const i of newItems) {
+      news.push(`👗 新装扮「${i.name}」`)
+      // 那个位置空着的话，自动穿上
+      if (after.outfit[i.slot] === '') after.outfit = { ...after.outfit, [i.slot]: i.id }
+    }
+  }
+
+  await $.store.set(STORE_KEY, after)
+  await update($, pet, p => ({
+    ...p,
+    ...after,
+    say: news.length > 0 ? (news[news.length - 1] ?? p.say) : p.say,
+  }))
+  // 专注模式不弹提示（消息还是会记在 /pet 面板里）
+  if (!after.prefs.focus) {
+    for (const n of news) $.ui.toast(`Clawd：${n}`)
+  }
+  // 🏆 有新成就就响成就音（不等它放完）
+  if (news.length > 0 && after.prefs.sound) void playSound($, 'achievement')
+  return news.length
+}
+
+/** 真正"使用"了 Claude Code：加经验、喂饱食度、记统计 */
+function gain(
+  $: EngineInterface,
+  g: { xp?: number; coins?: number; food?: number; turns?: number; tools?: number; edits?: number },
+) {
+  return commit(
+    $,
+    (s, now) => ({
+      ...s,
+      xp: s.xp + (g.xp ?? 0),
+      coins: s.coins + (g.coins ?? 0),
+      turns: s.turns + (g.turns ?? 0),
+      tools: s.tools + (g.tools ?? 0),
+      edits: s.edits + (g.edits ?? 0),
+      ...(g.food ? { fullness: Math.min(100, fullnessAt(s, now) + g.food), lastFed: now } : {}),
+    }),
+    { isUse: true },
+  )
+}
+
+// =====================================================================
+// 🛒 商店：花金币
+//   钱够才扣，在存档最新的值上判断（两个聊天同时买也不会扣成负数）
+// =====================================================================
+
+async function buyFood($: EngineInterface, f: Food) {
+  let ok = false
+  let short = 0
+  await commit($, (s, now) => {
+    if (s.coins < f.price) {
+      short = f.price - s.coins
+      return s
+    }
+    ok = true
+    return { ...s, coins: s.coins - f.price, fullness: Math.min(100, fullnessAt(s, now) + f.food), lastFed: now }
+  })
+  if (ok) {
+    await setMood($, 'happy', { holdMs: 4000, say: f.say })
+    if ((await loadProgress($)).prefs.sound) void playSound($, 'coin')
+  } else {
+    await setMood($, 'sad', { holdMs: 3000, say: `还差 ${short} 💰……多干点活吧` })
+  }
+}
+
+async function buyItem($: EngineInterface, id: string) {
+  const item = ITEMS.find(i => i.id === id)
+  if (!item || item.price === undefined) return
+  const price = item.price
+  let ok = false
+  let short = 0
+  await commit($, s => {
+    if (s.wardrobe.includes(id)) return s
+    if (s.coins < price) {
+      short = price - s.coins
+      return s
+    }
+    ok = true
+    return {
+      ...s,
+      coins: s.coins - price,
+      wardrobe: [...s.wardrobe, id],
+      outfit: { ...s.outfit, [item.slot]: id }, // 买了马上穿上
+    }
+  })
+  if (ok) {
+    await setMood($, 'happy', { holdMs: 5000, say: `买到「${item.name}」啦！马上穿上 ✨` })
+    if ((await loadProgress($)).prefs.sound) void playSound($, 'coin')
+  } else if (short > 0) {
+    await setMood($, 'sad', { holdMs: 3000, say: `还差 ${short} 💰……多干点活吧` })
+  }
+}
+
+/** 每天第一次使用：打卡 */
+async function checkIn($: EngineInterface) {
+  const now = await $.clock.now()
+  const today = dayKey(now)
+  if ((await loadProgress($)).lastDay === today) return
+
+  let streak = 1
+  let bonus = 0
+  await commit(
+    $,
+    s => {
+      if (s.lastDay === today) return s // 别的聊天刚好先打过卡
+      streak = s.lastDay === dayKey(now - 86400000) ? s.streak + 1 : 1
+      bonus = XP_DAILY * (streak >= STREAK_DOUBLE_AT ? 2 : 1)
+      return { ...s, streak, lastDay: today, xp: s.xp + bonus, coins: s.coins + COIN_DAILY }
+    },
+    { isUse: true },
+  )
+  if (bonus > 0) $.ui.toast(`Clawd：打卡成功，连续 ${streak} 天 🔥 +${bonus} XP`)
+}
+
+/** 从存档同步到画面（别的聊天升级了，这里也能看到） */
+async function sync($: EngineInterface) {
+  const s = await loadProgress($)
+  const p = await read($, pet)
+  // 存档没变就什么都不写，免得面板白白重画
+  if (JSON.stringify(s) === JSON.stringify({ ...emptyProgress, ...pickProgress(p) })) return
+  await update($, pet, q => ({ ...q, ...s }))
+}
+
+/** 从 Pet 里只取出要存档的那部分 */
+function pickProgress(p: Pet): Progress {
+  const out = {} as Record<string, unknown>
+  for (const k of Object.keys(emptyProgress)) out[k] = (p as unknown as Record<string, unknown>)[k]
+  return out as Progress
+}
+
+function pick(list: string[], seed: number): string {
+  return list.length === 0 ? '' : (list[seed % list.length] ?? '')
+}
+
+function bar(frac: number, len: number): string {
+  const filled = Math.max(0, Math.min(len, Math.round(frac * len)))
+  return '█'.repeat(filled) + '░'.repeat(len - filled)
+}
+
+async function setMood(
+  $: EngineInterface,
+  mood: Mood,
+  opts: { holdMs?: number; tool?: string; say?: string } = {},
+) {
+  const now = await $.clock.now()
+  await update($, pet, p => ({
+    ...p,
+    mood,
+    moodUntil: opts.holdMs ? now + opts.holdMs : 0,
+    lastActive: now,
+    tool: opts.tool ?? p.tool,
+    say: opts.say ?? pick(LINES[mood], Math.floor(now / 1000)),
+    // 一有正事，小剧场马上停，过一阵子再演
+    skit: '',
+    skitUntil: 0,
+    nextSkitAt: now + randomBetween(SKIT_GAP_MIN, SKIT_GAP_MAX),
+  }))
+}
+
+// =====================================================================
+// 🎭 发呆小剧场：闲着的时候，每隔一阵子随机演一段
+// =====================================================================
+
+const SKIT_GAP_MIN = 20000 // 两段小剧场之间最少隔 20 秒
+const SKIT_GAP_MAX = 45000 // 最多隔 45 秒
+
+function randomBetween(lo: number, hi: number): number {
+  return lo + Math.floor(Math.random() * (hi - lo))
+}
+
+function chooseSkit(form: Form): Skit {
+  const list = [...SKITS_COMMON, ...SKITS_BY_FORM[form]]
+  return list[Math.floor(Math.random() * list.length)] ?? SKITS_COMMON[0]!
+}
+
+// =====================================================================
+// 主体：接上 Claude Code 的各种事件
+// =====================================================================
+
+export const register: Register = on => {
+  on('session.start', async ($, e, next) => {
+    // 旧版只存了摸头次数，搬过来
+    if ((await $.store.get(STORE_KEY)) === undefined) {
+      const old = (await $.store.get('progress')) as { pets?: number } | undefined
+      if (old?.pets) await $.store.set(STORE_KEY, { ...emptyProgress, pets: old.pets })
+    }
+    const now = await $.clock.now()
+    await sync($)
+    await update($, pet, p => ({ ...p, lastActive: p.lastActive || now }))
+
+    await $.command.register({ name: 'pet', description: '打开 Clawd 养成面板' })
+    await $.command.register({ name: 'clawd-focus', description: '开关 Clawd 的专注模式' })
+    await $.command.register({ name: 'clawd-dex', description: '打开 Clawd 图鉴：预览所有形态、动作和装扮' })
+    await $.command.register({ name: 'clawd-week', description: '打开 Clawd 周报：本周统计 + 一键生成周报草稿' })
+    void $.ui.open({ id: PANE, title: TITLE })
+
+    // 心跳：每 0.7 秒检查一次心情过期、肚子饿、睡觉、要不要演小剧场；约每 7 秒从存档同步一次
+    let ticks = 0
+    $.clock.every(700, async () => {
+      ticks++
+      await update($, frameAtom, f => (f + 1) % 1000) // 只有终端文字版读它
+      if (ticks % 10 === 0) await sync($)
+      const t = await $.clock.now()
+      const p = await read($, pet)
+      const seed = Math.floor(t / 1000)
+
+      let { mood, moodUntil, say, skit, skitUntil, nextSkitAt } = p
+      if (moodUntil !== 0 && t > moodUntil) {
+        mood = 'idle'
+        moodUntil = 0
+        say = pick(LINES.idle, seed)
+      }
+      const isHungry = fullnessAt(p, t) < HUNGRY_BELOW
+      if (mood === 'idle' && isHungry) {
+        mood = 'hungry'
+        say = pick(LINES.hungry, seed)
+      } else if (mood === 'hungry' && !isHungry) {
+        mood = 'idle'
+      }
+      if ((mood === 'idle' || mood === 'hungry') && p.prefs.sleepMin > 0 && t - p.lastActive > p.prefs.sleepMin * 60000) {
+        mood = 'sleepy'
+        say = pick(LINES.sleepy, seed)
+      }
+
+      // 🎭 小剧场：演完就收场；发呆够久了就随机开演（专注模式不演）
+      if (skit !== '' && (t > skitUntil || mood !== 'idle')) {
+        skit = ''
+        nextSkitAt = t + randomBetween(SKIT_GAP_MIN, SKIT_GAP_MAX)
+        if (mood === 'idle') say = pick(LINES.idle, seed)
+      } else if (skit === '' && mood === 'idle' && !p.prefs.focus) {
+        if (nextSkitAt === 0) nextSkitAt = t + randomBetween(SKIT_GAP_MIN, SKIT_GAP_MAX)
+        else if (t >= nextSkitAt) {
+          const s = chooseSkit(formOf(levelOf(p.xp)))
+          skit = s.id
+          skitUntil = t + s.ms
+          say = s.say
+        }
+      }
+
+      // 真的有变化才写，免得面板每 0.7 秒重画一次
+      const changed =
+        mood !== p.mood || moodUntil !== p.moodUntil || say !== p.say ||
+        skit !== p.skit || skitUntil !== p.skitUntil || nextSkitAt !== p.nextSkitAt
+      // 如果这期间 Claude 刚好开始干活（lastActive 变了），就别覆盖它
+      if (changed) {
+        await update($, pet, q =>
+          q.lastActive !== p.lastActive ? q : { ...q, mood, moodUntil, say, skit, skitUntil, nextSkitAt },
+        )
+      }
+    })
+
+    return next(e)
+  })
+
+  on('command.run', { command: 'pet' }, async $ => {
+    await $.ui.open({ id: PANE, title: TITLE })
+    return { text: 'Clawd 出来啦！' }
+  })
+
+  on('command.run', { command: 'clawd-dex' }, async $ => {
+    await $.ui.open({ id: DEX_PANE, title: 'Clawd 图鉴' })
+    return { text: '📖 图鉴打开啦：随便看，不会解锁哦' }
+  })
+
+  on('command.run', { command: 'clawd-week' }, async $ => {
+    await update($, weekView, w => ({ ...w, refresh: w.refresh + 1, note: '' }))
+    await $.ui.open({ id: WEEK_PANE, title: 'Clawd 周报' })
+    return { text: '📋 周报面板打开啦' }
+  })
+
+  // /clawd-focus：开关专注模式（/focus 是 Claude Code 自带的命令，不能用）
+  on('command.run', { command: 'clawd-focus' }, async $ => {
+    const isOn = !(await loadProgress($)).prefs.focus
+    await commit($, s => ({ ...s, prefs: { ...s.prefs, focus: isOn } }))
+    return { text: isOn ?'🤫 专注模式已开启：Clawd 会安静陪着你' : '🦀 专注模式已关闭' }
+  })
+
+  // 记录每一轮从什么时候开始，用来判断是不是"长任务"
+  let turnStartedAt = 0
+
+  // 你发消息 → 每日打卡 + 开始思考
+  on('prompt.submit', async ($, e, next) => {
+    turnStartedAt = await $.clock.now()
+    await setMood($, 'thinking')
+    await checkIn($)
+    // 📋 小账本：记下今天在哪个项目里工作
+    const cwd = await $.session.cwd()
+    await logToday($, d => logProject(d, cwd))
+    return next(e)
+  }).catch(($, e, next) => next(e)) // 桌宠出错也绝不挡住你的消息
+
+  // Claude 用工具 → 专属动作；成功了才算经验
+  on('tool.call', async ($, e, next) => {
+    await setMood($, 'working', { tool: e.tool, say: KIND_SAY[toolKind(e.tool)] })
+    const ran = await next(e)
+    const failed = ran.deny !== undefined || ran.isError === true
+    // 📋 小账本：记下用了什么工具、改了哪个文件、有没有出错
+    const filePath = (e as { file_path?: unknown }).file_path
+    await logToday($, d => logTool(d, e.tool, !failed, typeof filePath === 'string' ? filePath : undefined))
+    if (failed) {
+      await setMood($, 'oops', { holdMs: 4000, say: `${e.tool} 冒烟了……` })
+    } else {
+      const isEdit = EDIT_TOOLS.includes(e.tool)
+      await setMood($, 'thinking')
+      await gain($, { xp: XP_TOOL + (isEdit ? XP_EDIT : 0), coins: COIN_TOOL, food: FOOD_TOOL, tools: 1, edits: isEdit ? 1 : 0 })
+    }
+    return ran
+  }).catch(($, e, next) => next(e)) // 桌宠出错也绝不挡住 Claude 的工具
+
+  // 一轮结束 → 成功回答才有经验
+  on('turn.complete', async ($, e, next) => {
+    if (e.reason === 'answer') {
+      await setMood($, 'happy', { holdMs: 10000 })
+      const unlocked = await gain($, { xp: XP_TURN, coins: COIN_TURN, food: FOOD_TURN, turns: 1 })
+      await logToday($, d => {
+        d.turns++
+      })
+      // ✅ 长任务完成 → 响完成音（如果刚好解锁了成就，成就音已经响过，就不重复）
+      const seconds = turnStartedAt ? ((await $.clock.now()) - turnStartedAt) / 1000 : 0
+      const { prefs } = await loadProgress($)
+      if (unlocked === 0 && prefs.sound && seconds >= prefs.longTaskSec) void playSound($, 'done')
+    } else {
+      await setMood($, 'sad', { holdMs: 8000 })
+    }
+    return next(e)
+  })
+
+  // =====================================================================
+  // 画面
+  // =====================================================================
+
+  // ---------- 侧边面板：完整养成信息 + 衣柜 ----------
+  on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
+    const els = $.ui.resolve(e)
+    const { Box, Text, Button, Select } = els
+    const Svg = 'Svg' in els ? els.Svg : undefined
+    const p = await read($, pet)
+    const frame = Svg ? 0 : await read($, frameAtom) // 桌面版不读帧，就不会每 0.7 秒重画
+    const now = await $.clock.now()
+
+    const lv = levelOf(p.xp)
+    const form = formOf(lv)
+    const lo = xpForLevel(lv)
+    const hi = xpForLevel(lv + 1)
+    const full = fullnessAt(p, now)
+    const isHungry = full < HUNGRY_BELOW
+    const [row1, row2, row3] = clawdText(p.mood, frame)
+
+    const wear = (slot: Slot, id: string) =>
+      commit($, s => ({ ...s, outfit: { ...s.outfit, [slot]: id } }))
+    /** 改一项设置：在存档里最新的设置上改，所有聊天同步 */
+    const setPref = (change: Partial<Prefs>) =>
+      commit($, s => ({ ...s, prefs: { ...s.prefs, ...change } }))
+
+    return (
+      <Box flexDirection="column">
+        <Text>💬 {p.say}</Text>
+        <Text> </Text>
+        {Svg ? (
+          <Svg source={clawdSvg(p.mood, form, isHungry, p.tool, p.outfit, tempoOf(p.prefs), p.skit)} alt="Clawd" width={120} height={104} />
+        ) : (
+          <Box flexDirection="column">
+            <Text mono color="claude">{ABOVE[p.mood][frame % 2] || ' '}</Text>
+            <Text mono color="claude">   {row1}</Text>
+            <Text mono color="claude">   {row2}</Text>
+            <Text mono color="claude">   {row3}</Text>
+          </Box>
+        )}
+        <Text> </Text>
+
+        <Text weight="bold">
+          Lv.{lv} <Text color="claude">{FORM_LABEL[form]}</Text>
+          <Text dimColor> · {MOOD_LABEL[p.mood]}</Text>
+        </Text>
+        <Text>
+          经验 <Text mono color="claude">{bar((p.xp - lo) / (hi - lo), 12)}</Text>
+          <Text dimColor> {p.xp - lo}/{hi - lo}</Text>
+        </Text>
+        <Text>
+          饱食 <Text mono color={isHungry ? 'error' : 'success'}>{bar(full / 100, 12)}</Text>
+          <Text dimColor> {Math.round(full)}%</Text>
+        </Text>
+        <Text>
+          打卡 🔥 连续 {p.streak} 天
+          {p.streak >= STREAK_DOUBLE_AT ? <Text color="claude"> (经验 ×2)</Text> : ''}
+        </Text>
+        <Text>
+          金币 <Text color="warning">💰 {p.coins}</Text>
+        </Text>
+        <Text dimColor>下一形态：{FORM_NEXT[form]}</Text>
+        <Text> </Text>
+
+        <Box flexDirection="row" gap={1}>
+          <Button
+            key="pat"
+            label="摸摸头"
+            hotkey="p"
+            onPress={async () => {
+              await setMood($, 'love', { holdMs: 4000 })
+              await commit($, s => ({ ...s, pets: s.pets + 1 }))
+            }}
+          />
+          <Button
+            key="snack"
+            label="喂零食"
+            hotkey="f"
+            onPress={() => setMood($, 'happy', { holdMs: 4000, say: '好吃！不过要多干活才能长大哦' })}
+          />
+          <Button key="wake" label="叫醒" hotkey="w" onPress={() => setMood($, 'idle', { say: '我醒啦！' })} />
+          <Button
+            key="open-dex"
+            label="📖 图鉴"
+            hotkey="d"
+            onPress={() => void $.ui.open({ id: DEX_PANE, title: 'Clawd 图鉴' })}
+          />
+          <Button
+            key="open-week"
+            label="📋 周报"
+            hotkey="r"
+            onPress={async () => {
+              await update($, weekView, w => ({ ...w, refresh: w.refresh + 1, note: '' }))
+              await $.ui.open({ id: WEEK_PANE, title: 'Clawd 周报' })
+            }}
+          />
+        </Box>
+        <Text> </Text>
+
+        {/* ===================== ⚙️ 设置 ===================== */}
+        <Text weight="bold">⚙️ 设置</Text>
+        <Box flexDirection="row" flexWrap="wrap" gap={1}>
+          <Button
+            key="focus"
+            label={p.prefs.focus ? '🤫 专注模式：开' : '专注模式：关'}
+            hotkey="z"
+            onPress={() => setPref({ focus: !p.prefs.focus })}
+          />
+          <Button
+            key="sound"
+            label={p.prefs.sound ? '🔔 提示音：开' : '🔕 提示音：关'}
+            hotkey="s"
+            onPress={() => setPref({ sound: !p.prefs.sound })}
+          />
+          <Button
+            key="show-text"
+            label={p.prefs.showText ? '💬 右上角文字：开' : '右上角文字：关'}
+            onPress={() => setPref({ showText: !p.prefs.showText })}
+          />
+        </Box>
+        <Select
+          key="volume"
+          label="🔊 音量"
+          value={p.prefs.volume}
+          options={[
+            { value: 'low', label: '低' },
+            { value: 'mid', label: '中' },
+            { value: 'high', label: '高' },
+          ]}
+          onSelect={v => setPref({ volume: v as Prefs['volume'] })}
+        />
+        <Box flexDirection="row" gap={1}>
+          <Button key="try-ach" label="▶ 试听成就音" onPress={() => playSound($, 'achievement')} />
+          <Button key="try-done" label="▶ 试听完成音" onPress={() => playSound($, 'done')} />
+        </Box>
+        <Select
+          key="long-task"
+          label="⏱ 完成音触发：任务超过"
+          value={String(p.prefs.longTaskSec)}
+          options={[
+            { value: '10', label: '10 秒' },
+            { value: '30', label: '30 秒' },
+            { value: '60', label: '1 分钟' },
+            { value: '120', label: '2 分钟' },
+          ]}
+          onSelect={v => setPref({ longTaskSec: Number(v) })}
+        />
+        <Select
+          key="sleep"
+          label="😴 多久没动静就睡觉"
+          value={String(p.prefs.sleepMin)}
+          options={[
+            { value: '1', label: '1 分钟' },
+            { value: '2', label: '2 分钟' },
+            { value: '5', label: '5 分钟' },
+            { value: '10', label: '10 分钟' },
+            { value: '0', label: '永远不睡' },
+          ]}
+          onSelect={v => setPref({ sleepMin: Number(v) })}
+        />
+        <Select
+          key="speed"
+          label="🎞 动画速度"
+          value={p.prefs.speed}
+          options={[
+            { value: 'slow', label: '慢' },
+            { value: 'normal', label: '正常' },
+            { value: 'fast', label: '快' },
+          ]}
+          onSelect={v => setPref({ speed: v as Prefs['speed'] })}
+        />
+        <Select
+          key="size"
+          label="📏 聊天框上方 Clawd 大小"
+          value={p.prefs.size}
+          options={[
+            { value: 'small', label: '小' },
+            { value: 'medium', label: '中' },
+            { value: 'large', label: '大' },
+          ]}
+          onSelect={v => setPref({ size: v as Prefs['size'] })}
+        />
+        <Button
+          key="reset-prefs"
+          label="↺ 恢复默认设置"
+          onPress={() => commit($, s => ({ ...s, prefs: { ...emptyProgress.prefs } }))}
+        />
+        <Text dimColor>专注模式：不说话、不弹提示、动画再慢一倍 · 设置会同步到所有聊天</Text>
+        <Text> </Text>
+
+        {/* ===================== 🛒 商店 ===================== */}
+        <Text weight="bold">
+          🛒 商店 <Text color="warning">💰 {p.coins}</Text>
+        </Text>
+        <Text dimColor>
+          赚金币：对话 +{COIN_TURN} · 工具 +{COIN_TOOL} · 打卡 +{COIN_DAILY} · 徽章 +{COIN_BADGE} · 升级 +等级×{COIN_LEVEL}
+        </Text>
+        <Text dimColor>🍙 吃的（恢复饱食度）</Text>
+        <Box flexDirection="row" flexWrap="wrap" gap={1}>
+          {FOODS.map(f => (
+            <Button
+              key={`food-${f.id}`}
+              label={`${f.name} +${f.food}% · ${f.price}💰`}
+              dimColor={p.coins < f.price}
+              onPress={() => buyFood($, f)}
+            />
+          ))}
+        </Box>
+        <Text dimColor>👗 限定装扮（买了就是你的）</Text>
+        <Box flexDirection="row" flexWrap="wrap" gap={1}>
+          {ITEMS.filter(i => i.price !== undefined).map(i =>
+            p.wardrobe.includes(i.id) ? (
+              <Text key={`owned-${i.id}`} dimColor>
+                ✅ {i.name}
+              </Text>
+            ) : (
+              <Button
+                key={`buy-${i.id}`}
+                label={`${i.name} · ${i.price}💰`}
+                dimColor={p.coins < (i.price ?? 0)}
+                onPress={() => buyItem($, i.id)}
+              />
+            ),
+          )}
+        </Box>
+        <Text dimColor>想先看看戴上什么样？去 📖 图鉴里试穿</Text>
+        <Text> </Text>
+
+        <Text weight="bold">
+          👗 衣柜 {p.wardrobe.length}/{ITEMS.length}
+        </Text>
+        {SLOTS.map(slot => {
+          const owned = ITEMS.filter(i => i.slot === slot && p.wardrobe.includes(i.id))
+          const locked = ITEMS.filter(i => i.slot === slot && !p.wardrobe.includes(i.id))
+          return (
+            <Box key={`slot-${slot}`} flexDirection="column">
+              <Text dimColor>{SLOT_LABEL[slot]}</Text>
+              <Box flexDirection="row" flexWrap="wrap" gap={1}>
+                <Button
+                  key={`none-${slot}`}
+                  label={p.outfit[slot] === '' ? '✓ 不戴' : '不戴'}
+                  onPress={() => wear(slot, '')}
+                />
+                {owned.map(i => (
+                  <Button
+                    key={`wear-${i.id}`}
+                    label={p.outfit[slot] === i.id ? `✓ ${i.name}` : i.name}
+                    onPress={() => wear(slot, i.id)}
+                  />
+                ))}
+              </Box>
+              {locked.map(i => (
+                <Text dimColor>🔒 {i.hint}</Text>
+              ))}
+            </Box>
+          )
+        })}
+        <Text> </Text>
+
+        <Text weight="bold">
+          🏅 徽章 {p.badges.length}/{BADGES.length}
+        </Text>
+        {BADGES.map(b => (p.badges.includes(b.id) ? <Text>🏅 {b.name}</Text> : <Text dimColor>🔒 {b.hint}</Text>))}
+        <Text> </Text>
+
+        <Text weight="bold">📊 统计</Text>
+        <Text dimColor>
+          对话 {p.turns} 轮 · 工具 {p.tools} 次 · 改文件 {p.edits} 次 · 摸头 {p.pets} 次
+        </Text>
+      </Box>
+    )
+  })
+
+  // ---------- 📋 周报面板：一周统计 + 生成周报草稿 ----------
+  on('ui.render', { component: 'Pane', requestId: WEEK_PANE }, async ($, e) => {
+    const { Box, Text, Button, Select, Input } = $.ui.resolve(e)
+    const v = await read($, weekView) // 只订阅周报自己的状态，不会被心跳打扰
+    const now = await $.clock.now()
+    const prog = await loadProgress($)
+    const all = await loadDays($)
+    const w = buildWeek(all, now, v.offset, prog.prefs.internStart)
+    const md = weekMarkdown(w)
+    const maxTurns = Math.max(1, ...w.days.map(d => d.log.turns))
+    const today = dayKey(now)
+
+    const setNote = (note: string) => update($, weekView, x => ({ ...x, note }))
+    const fileName = `${w.start}_${w.end}.md`
+
+    return (
+      <Box flexDirection="column">
+        <Text weight="bold">
+          📋 {w.internWeek ? `实习第 ${w.internWeek} 周` : `第 ${w.week} 周`}
+          <Text dimColor>（{w.start} ~ {w.end}）</Text>
+        </Text>
+        <Box flexDirection="row" gap={1}>
+          <Select
+            key="week-pick"
+            label="看哪一周"
+            value={String(v.offset)}
+            options={[0, -1, -2, -3].map(o => ({ value: String(o), label: o === 0 ? '本周' : o === -1 ? '上周' : `${-o} 周前` }))}
+            onSelect={x => update($, weekView, s => ({ ...s, offset: Number(x), note: '' }))}
+          />
+          <Button key="week-refresh" label="↻ 刷新" onPress={() => update($, weekView, s => ({ ...s, refresh: s.refresh + 1 }))} />
+        </Box>
+        <Text> </Text>
+
+        <Text weight="bold">📊 每天的对话轮数</Text>
+        {w.days.map(d => (
+          <Text key={`day-${d.key}`} mono>
+            {d.label} <Text color="claude">{bar(d.log.turns / maxTurns, 14)}</Text>
+            <Text dimColor>
+              {' '}
+              {d.log.turns} 轮 · {d.log.tools} 次操作{d.key === today ? ' ← 今天' : ''}
+            </Text>
+          </Text>
+        ))}
+        <Text> </Text>
+
+        <Text weight="bold">本周合计</Text>
+        <Text>
+          开发 {w.activeDays} 天 · 对话 {w.total.turns} 轮 · 操作 {w.total.tools} 次 · 改文件 {w.total.edits} 次 · 出错 {w.total.fails} 次
+        </Text>
+        <Text dimColor>项目：{w.total.projects.length ? w.total.projects.join('、') : '（还没有记录）'}</Text>
+        <Text dimColor>
+          改得最多的文件：
+          {top(w.total.files, 5).map(([f, n]) => `${f}×${n}`).join('、') || '（还没有记录）'}
+        </Text>
+        <Text> </Text>
+
+        <Text weight="bold">📝 周报草稿</Text>
+        <Text dimColor>格式：周数和日期 / 目前进度 / 遇到的困难 / 下周计划 / 截图。（填写）的地方要你自己补上</Text>
+        <Box flexDirection="row" flexWrap="wrap" gap={1}>
+          <Button
+            key="week-copy"
+            label="📋 复制到剪贴板"
+            variant="primary"
+            onPress={async () => setNote((await copyToClipboard($, md)) ? '✅ 已复制！去周报里直接粘贴吧' : '❌ 复制失败（只支持 Windows），可以用"存成文件"')}
+          />
+          <Button
+            key="week-save"
+            label="💾 存成文件"
+            onPress={async () => {
+              const path = `${$.plugin.root}/reports/${fileName}`
+              try {
+                await $.fs.write(path, md)
+                await setNote(`✅ 已存到 ${path}`)
+              } catch {
+                await setNote('❌ 存文件失败')
+              }
+            }}
+          />
+        </Box>
+        {v.note ? <Text color={v.note.startsWith('✅') ? 'success' : 'error'}>{v.note}</Text> : null}
+        <Text> </Text>
+        <Box borderStyle="round" borderDimColor paddingX={1} flexDirection="column">
+          {md.split('\n').map((line, i) => (
+            <Text key={`md-${i}`} weight={line.startsWith('#') ? 'bold' : undefined} dimColor={line.includes('（填写') || line.includes('（补充')}>
+              {line || ' '}
+            </Text>
+          ))}
+        </Box>
+        <Text> </Text>
+
+        <Text weight="bold">⚙️ 实习开始日期</Text>
+        <Text dimColor>设了之后，标题会显示"实习第 X 周"。现在：{prog.prefs.internStart || '没设'}</Text>
+        <Input
+          key="intern-start"
+          placeholder="例如 2026-10-06"
+          value={prog.prefs.internStart}
+          submitLabel="保存"
+          onSubmit={async x => {
+            const s = x.trim()
+            if (s !== '' && !/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+              await setNote('❌ 日期格式要像 2026-10-06')
+              return
+            }
+            await commit($, p => ({ ...p, prefs: { ...p.prefs, internStart: s } }))
+            await update($, weekView, z => ({ ...z, refresh: z.refresh + 1, note: s ? '✅ 实习开始日期已保存' : '✅ 已清除' }))
+          }}
+        />
+      </Box>
+    )
+  })
+
+  // ---------- 📖 图鉴面板：预览所有形态 × 动作 × 装扮 ----------
+  on('ui.render', { component: 'Pane', requestId: DEX_PANE }, async ($, e) => {
+    const els = $.ui.resolve(e)
+    const { Box, Text, Button, Select } = els
+    const Svg = 'Svg' in els ? els.Svg : undefined
+    // 读存档而不是 pet：pet 一变图鉴就会重画、滚动条会跳回顶部
+    const p = await loadProgress($)
+    const d = await read($, dex)
+    const myLv = levelOf(p.xp)
+    const { mood, tool, skit } = parseAct(d.act)
+    const tempo = tempoOf(p.prefs)
+    const setDex = (change: Partial<Dex>) => update($, dex, x => ({ ...x, ...change }))
+
+    if (!Svg) {
+      return <Text dimColor>图鉴需要在 Claude 桌面 app 里看（终端画不出像素图）。</Text>
+    }
+
+    return (
+      <Box flexDirection="column">
+        <Text dimColor>只是预览，不会解锁。要真正得到，还是得靠使用 Claude Code 哦～</Text>
+        <Text> </Text>
+
+        {/* 四个形态并排：点一下选中 */}
+        <Text weight="bold">四个形态</Text>
+        <Box flexDirection="row" flexWrap="wrap" gap={1}>
+          {DEX_FORMS.map(f => (
+            <Box key={`dex-form-${f.id}`} flexDirection="column" alignItems="center">
+              <Svg
+                source={clawdSvg(mood, f.id, false, tool, d.outfit, tempo, skit)}
+                alt={FORM_LABEL[f.id]}
+                width={72}
+                height={62}
+              />
+              <Button
+                key={`pick-${f.id}`}
+                label={`${d.form === f.id ? '✓ ' : ''}${FORM_LABEL[f.id]}`}
+                onPress={() => setDex({ form: f.id })}
+              />
+              <Text size="caption" dimColor>
+                {myLv >= f.unlockLv ? '✅ 已拥有' : `🔒 Lv.${f.unlockLv}`}
+              </Text>
+            </Box>
+          ))}
+        </Box>
+        <Text> </Text>
+
+        {/* 选中的形态放大看 */}
+        <Text weight="bold">
+          {FORM_LABEL[d.form]} · {DEX_ACTS.find(a => a.value === d.act)?.label ?? d.act}
+        </Text>
+        <Svg source={clawdSvg(mood, d.form, false, tool, d.outfit, tempo, skit)} alt="Clawd 预览" width={160} height={139} />
+        <Text> </Text>
+
+        <Select
+          key="dex-act"
+          label="🎬 动作"
+          value={d.act}
+          options={DEX_ACTS}
+          onSelect={v => setDex({ act: v })}
+        />
+        {SLOTS.map(slot => (
+          <Select
+            key={`dex-${slot}`}
+            label={`👗 ${SLOT_LABEL[slot]}`}
+            value={d.outfit[slot]}
+            options={[
+              { value: '', label: '不戴' },
+              ...ITEMS.filter(i => i.slot === slot).map(i => ({
+                value: i.id,
+                label: p.wardrobe.includes(i.id) ? `${i.name} ✅` : `${i.name} 🔒 ${i.hint}`,
+              })),
+            ]}
+            onSelect={v => setDex({ outfit: { ...d.outfit, [slot]: v } })}
+          />
+        ))}
+        <Box flexDirection="row" gap={1}>
+          <Button
+            key="dex-mine"
+            label="换成我现在的样子"
+            onPress={() => setDex({ form: formOf(myLv), outfit: { ...p.outfit } })}
+          />
+          <Button
+            key="dex-clear"
+            label="脱掉全部装扮"
+            onPress={() => setDex({ outfit: { head: '', face: '', neck: '' } })}
+          />
+        </Box>
+      </Box>
+    )
+  })
+
+  // ---------- 聊天框右上角：Clawd + 一句话 ----------
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    if (e.props.hasSurvey) {
+      return next(e)
+    }
+    const els = $.ui.resolve(e)
+    const { Box, Text } = els
+    const Svg = 'Svg' in els ? els.Svg : undefined
+    const frame = Svg ? 0 : await read($, frameAtom) // 桌面版不读帧，就不会每 0.7 秒重画
+    const p = await read($, pet)
+    const now = await $.clock.now()
+    const lv = levelOf(p.xp)
+    const isHungry = fullnessAt(p, now) < HUNGRY_BELOW
+    const [row1, row2, row3] = clawdText(p.mood, frame)
+    const deco = ABOVE[p.mood][frame % 2] ?? ''
+
+    return (
+      <Box flexDirection="row" justifyContent="flex-end" alignItems="flex-end" gap={1}>
+        {/* 专注模式：不说话，只留一个小小的 🤫 */}
+        {p.prefs.focus ? (
+          <Text size="caption" dimColor>🤫</Text>
+        ) : !p.prefs.showText ? null : (
+          <Box flexDirection="column" alignItems="flex-end">
+            <Text size="footnote">
+              <Text dimColor>{p.say} </Text>
+              <Text color="claude">{deco.trim()}</Text>
+            </Text>
+            <Text size="caption" dimColor>
+              Lv.{lv} · {MOOD_LABEL[p.mood]}
+              {isHungry ? ' · 🍙 饿了' : ''}
+              {p.streak > 1 ? ` · 🔥${p.streak}` : ''}
+            </Text>
+          </Box>
+        )}
+        {Svg ? (
+          <Svg source={clawdSvg(p.mood, formOf(lv), isHungry, p.tool, p.outfit, tempoOf(p.prefs), p.skit)} alt="Clawd" width={SIZE_PX[p.prefs.size]} height={Math.round((SIZE_PX[p.prefs.size] * 13) / 15)} />
+        ) : (
+          <Box flexDirection="column">
+            <Text mono color="claude">{row1}</Text>
+            <Text mono color="claude">{row2}</Text>
+            <Text mono color="claude">{row3}</Text>
+          </Box>
+        )}
+      </Box>
+    )
+  })
+}

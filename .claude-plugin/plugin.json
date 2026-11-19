@@ -1,0 +1,8 @@
+{
+  "name": "desk-pet",
+  "version": "0.1.0",
+  "license": "MIT",
+  "author": { "name": "Kho" },
+  "description": "Clawd 桌宠：住在聊天框上方的像素小螃蟹，跟着 Claude 思考、干活、完成任务而变化",
+  "types": "./types/index.d.ts"
+}

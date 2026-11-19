@@ -1,0 +1,5 @@
+{
+  "name": "clawd-local",
+  "owner": { "name": "Kho" },
+  "plugins": [{ "name": "desk-pet", "source": "./" }]
+}
