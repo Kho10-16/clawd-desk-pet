@@ -108,6 +108,7 @@ export const BADGES: Badge[] = [
   { id: 'lv10', name: '小绅士', hint: '达到 Lv.10', test: p => levelOf(p.xp) >= 10 },
   { id: 'lv20', name: '闪闪发光', hint: '达到 Lv.20', test: p => levelOf(p.xp) >= 20 },
   { id: 'pet50', name: '被宠爱的螃蟹', hint: '摸头 50 次', test: p => p.pets >= 50 },
+  { id: 'quest7', name: '任务达人', hint: '累计 7 天完成全部每日任务', test: p => p.questFullDays >= 7 },
 ]
 
 // ---------- 🎭 发呆小剧场 ----------
@@ -179,6 +180,9 @@ export const emptyProgress: Progress = {
   wardrobe: [],
   outfit: { head: '', face: '', neck: '' },
   coins: 0,
+  questDay: '',
+  questDone: [],
+  questFullDays: 0,
   prefs: {
     focus: false,
     sound: true,

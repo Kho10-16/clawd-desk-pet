@@ -2,7 +2,8 @@
 import type { Register, EngineInterface } from 'claude-code'
 
 import type { Dex, Mood, Pet, Prefs, Progress, Slot, WeekView } from '../types'
-import { buildWeek, loadDays, logProject, logToday, logTool, top, weekMarkdown } from './report'
+import { buildWeek, loadDays, loadToday, logProject, logToday, logTool, top, weekMarkdown } from './report'
+import { ALL_DONE_COINS, ALL_DONE_MARK, ALL_DONE_XP, questsFor } from './quests'
 import { ABOVE, LINES, MOOD_LABEL, clawdSvg, clawdText } from './art'
 import {
   BADGES,
@@ -466,6 +467,56 @@ function chooseSkit(form: Form): Skit {
 }
 
 // =====================================================================
+// 📅 每日任务：每次小账本记了一笔，就看看今天的任务有没有新完成的
+// =====================================================================
+
+/** 返回这次新领了几个奖 */
+async function checkQuests($: EngineInterface): Promise<number> {
+  const now = await $.clock.now()
+  const today = dayKey(now)
+  const quests = questsFor(today)
+  const log = await loadToday($)
+  const news: string[] = []
+  let isAllDone = false
+
+  await commit(
+    $,
+    s => {
+      // 新的一天：清空昨天的完成记录
+      const done = s.questDay === today ? [...s.questDone] : []
+      let { coins, xp, questFullDays } = s
+      for (const q of quests) {
+        if (!done.includes(q.key) && q.measure(log) >= q.target) {
+          done.push(q.key)
+          coins += q.coins
+          xp += q.xp
+          news.push(`✅ 每日任务「${q.text}」完成！+${q.coins}💰 +${q.xp} XP`)
+        }
+      }
+      const allFinished = quests.every(q => done.includes(q.key))
+      if (allFinished && !done.includes(ALL_DONE_MARK)) {
+        done.push(ALL_DONE_MARK)
+        coins += ALL_DONE_COINS
+        xp += ALL_DONE_XP
+        questFullDays++
+        isAllDone = true
+        news.push(`🏆 今天的任务全部完成！大奖 +${ALL_DONE_COINS}💰 +${ALL_DONE_XP} XP`)
+      }
+      return { ...s, questDay: today, questDone: done, coins, xp, questFullDays }
+    },
+    { isUse: true },
+  )
+
+  if (news.length > 0) {
+    const { prefs } = await loadProgress($)
+    if (!prefs.focus) for (const n of news) $.ui.toast(`Clawd：${n}`)
+    await setMood($, 'happy', { holdMs: 5000, say: news[news.length - 1] })
+    if (prefs.sound) void playSound($, isAllDone ? 'achievement' : 'coin')
+  }
+  return news.length
+}
+
+// =====================================================================
 // 👋 等你回复：Claude 问你问题、或者等你批准权限时，Clawd 举牌子 + 叮咚一声
 // =====================================================================
 
@@ -602,6 +653,7 @@ export const register: Register = on => {
     // 📋 小账本：记下今天在哪个项目里工作
     const cwd = await $.session.cwd()
     await logToday($, d => logProject(d, cwd))
+    await checkQuests($)
     return next(e)
   }).catch(($, e, next) => next(e)) // 桌宠出错也绝不挡住你的消息
 
@@ -636,6 +688,7 @@ export const register: Register = on => {
       const isEdit = EDIT_TOOLS.includes(e.tool)
       await setMood($, 'thinking')
       await gain($, { xp: XP_TOOL + (isEdit ? XP_EDIT : 0), coins: COIN_TOOL, food: FOOD_TOOL, tools: 1, edits: isEdit ? 1 : 0 })
+      await checkQuests($)
     }
     return ran
   }).catch(($, e, next) => next(e)) // 桌宠出错也绝不挡住 Claude 的工具
@@ -644,10 +697,11 @@ export const register: Register = on => {
   on('turn.complete', async ($, e, next) => {
     if (e.reason === 'answer') {
       await setMood($, 'happy', { holdMs: 10000 })
-      const unlocked = await gain($, { xp: XP_TURN, coins: COIN_TURN, food: FOOD_TURN, turns: 1 })
+      const gained = await gain($, { xp: XP_TURN, coins: COIN_TURN, food: FOOD_TURN, turns: 1 })
       await logToday($, d => {
         d.turns++
       })
+      const unlocked = gained + (await checkQuests($)) // 任务完成也算"已经响过声音"
       // ✅ 长任务完成 → 响完成音（如果刚好解锁了成就，成就音已经响过，就不重复）
       const seconds = turnStartedAt ? ((await $.clock.now()) - turnStartedAt) / 1000 : 0
       const { prefs } = await loadProgress($)
@@ -678,6 +732,11 @@ export const register: Register = on => {
     const full = fullnessAt(p, now)
     const isHungry = full < HUNGRY_BELOW
     const [row1, row2, row3] = clawdText(p.mood, frame)
+    // 📅 今日任务
+    const today = dayKey(now)
+    const quests = questsFor(today)
+    const todayLog = await loadToday($)
+    const questDone = p.questDay === today ? p.questDone : []
 
     const wear = (slot: Slot, id: string) =>
       commit($, s => ({ ...s, outfit: { ...s.outfit, [slot]: id } }))
@@ -720,6 +779,30 @@ export const register: Register = on => {
         <Text dimColor>下一形态：{FORM_NEXT[form]}</Text>
         <Text> </Text>
 
+        {/* ===================== 📅 今日任务 ===================== */}
+        <Text weight="bold">
+          📅 今日任务 {quests.filter(q => questDone.includes(q.key)).length}/{quests.length}
+          {questDone.includes(ALL_DONE_MARK) ? <Text color="success"> 🏆 全部完成！</Text> : ''}
+        </Text>
+        {quests.map(q => {
+          const have = Math.min(q.target, q.measure(todayLog))
+          const isDone = questDone.includes(q.key)
+          return (
+            <Text key={`quest-${q.key}`} dimColor={isDone}>
+              {isDone ? '✅' : '⬜'} {q.text}{' '}
+              <Text mono color={isDone ? 'success' : 'claude'}>{bar(have / q.target, 8)}</Text>
+              <Text dimColor>
+                {' '}
+                {have}/{q.target} · +{q.coins}💰
+              </Text>
+            </Text>
+          )
+        })}
+        <Text dimColor>
+          全部完成再送 +{ALL_DONE_COINS}💰 +{ALL_DONE_XP} XP · 每天 0 点换新任务 · 已全勤 {p.questFullDays} 天
+        </Text>
+        <Text> </Text>
+
         <Box flexDirection="row" gap={1}>
           <Button
             key="pat"
@@ -728,6 +811,10 @@ export const register: Register = on => {
             onPress={async () => {
               await setMood($, 'love', { holdMs: 4000 })
               await commit($, s => ({ ...s, pets: s.pets + 1 }))
+              await logToday($, d => {
+                d.pets = (d.pets ?? 0) + 1
+              })
+              await checkQuests($)
             }}
           />
           <Button
@@ -1068,6 +1155,7 @@ export const register: Register = on => {
               Lv.{lv} · {MOOD_LABEL[p.mood]}
               {isHungry ? ' · 🍙 饿了' : ''}
               {p.streak > 1 ? ` · 🔥${p.streak}` : ''}
+              {` · 📅${p.questDay === dayKey(now) ? p.questDone.filter(k => k !== ALL_DONE_MARK).length : 0}/3`}
             </Text>
           </Box>
         )}

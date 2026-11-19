@@ -40,6 +40,12 @@ export type Progress = {
   prefs: Prefs
   /** 💰 金币：干活赚，商店花 */
   coins: number
+  /** 📅 每日任务：今天是哪一天的任务 */
+  questDay: string
+  /** 今天已经完成（领过奖）的任务 key；"ALL" = 全部完成的大奖也领了 */
+  questDone: string[]
+  /** 累计有几天把每日任务全部完成 */
+  questFullDays: number
 }
 
 export type Prefs = {

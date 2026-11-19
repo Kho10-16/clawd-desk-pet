@@ -18,6 +18,7 @@ export type DayLog = {
   failTools: Record<string, number> // 哪个工具出错了几次（写"遇到的困难"时参考）
   projects: string[] // 在哪些项目里工作
   files: Record<string, number> // 改了哪些文件、各几次
+  pets?: number // 摸了 Clawd 几次（每日任务用；旧账本没有这一项）
 }
 
 const LOG_KEY = 'days-v1'
@@ -25,6 +26,12 @@ const KEEP_DAYS = 70 // 只保留最近 70 天，存档不会越来越大
 
 function emptyDay(): DayLog {
   return { turns: 0, tools: 0, edits: 0, fails: 0, kinds: {}, failTools: {}, projects: [], files: {} }
+}
+
+/** 今天的账本（没有就是空的） */
+export async function loadToday($: EngineInterface): Promise<DayLog> {
+  const days = await loadDays($)
+  return { ...emptyDay(), ...days[dayKey(await $.clock.now())] }
 }
 
 export async function loadDays($: EngineInterface): Promise<Record<string, DayLog>> {
