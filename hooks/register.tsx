@@ -660,6 +660,206 @@ async function checkQuests($: EngineInterface): Promise<number> {
   return news.length
 }
 
+/** 摸摸头：开心 + 记一笔（每日任务"摸摸 Clawd"会用到） */
+async function patClawd($: EngineInterface) {
+  await setMood($, 'love', { holdMs: 4000 })
+  await commit($, s => ({ ...s, pets: s.pets + 1 }))
+  await logToday($, d => {
+    d.pets = (d.pets ?? 0) + 1
+  })
+  await checkQuests($)
+}
+
+// =====================================================================
+// 🫧 Clawd 中心：Claude 外面的一个液态玻璃窗口（tools/hub.ps1 + tools/hub/index.html）
+//   Clawd → 窗口：把状态写进一个文件（变了才写），窗口每 0.6 秒来读
+//   窗口 → Clawd：按钮被按下 → hub.ps1 印一行 CLAWD_ACTION:{...} → 这里照做
+// =====================================================================
+
+let hubOpen = false
+let hubStatePath = ''
+let hubLast = ''
+
+/** 窗口需要的所有东西，打包成一个 JSON（now 不算在"有没有变"里面） */
+async function hubSnapshot($: EngineInterface): Promise<{ now: number; body: string }> {
+  const p = await read($, pet)
+  const now = await $.clock.now()
+  const lv = levelOf(p.xp)
+  const form = formOf(lv)
+  const night = isNightAt(p.prefs.nightFrom, now)
+  const isHungry = fullnessAt(p, now) < HUNGRY_BELOW
+  const today = dayKey(now)
+  const log = await loadToday($)
+  const done = p.questDay === today ? p.questDone : []
+  const quests = questsFor(today).map(q => ({
+    text: q.text, now: q.measure(log), target: q.target, coins: q.coins, xp: q.xp, done: done.includes(q.key),
+  }))
+  const bare = { head: '', face: '', neck: '' }
+  const snap = {
+    lv,
+    formLabel: FORM_LABEL[form],
+    formNext: FORM_NEXT[form],
+    xpIn: p.xp - xpForLevel(lv),
+    xpNeed: xpForLevel(lv + 1) - xpForLevel(lv),
+    fullness: Math.round(fullnessAt(p, now)),
+    hungry: isHungry,
+    coins: p.coins,
+    streak: p.streak,
+    say: p.say,
+    moodLabel: MOOD_LABEL[p.mood],
+    night,
+    hero: clawdSvg(p.mood, form, isHungry, p.tool, p.outfit, tempoOf(p.prefs), p.skit, p.pomo.phase, night),
+    avatar: clawdSvg('idle', form, false, '', p.outfit, 1, '', 'idle', night),
+    quests,
+    questsDone: quests.filter(q => q.done).length,
+    allDone: done.includes(ALL_DONE_MARK),
+    allCoins: ALL_DONE_COINS,
+    allXp: ALL_DONE_XP,
+    foods: FOODS.map(x => {
+      const [emoji = '🍙', ...rest] = x.name.split(' ')
+      return { id: x.id, emoji, name: rest.join(' ') || x.name, price: x.price, food: x.food }
+    }),
+    items: ITEMS.map(i => ({
+      id: i.id, slot: i.slot, slotLabel: SLOT_LABEL[i.slot], name: i.name, hint: i.hint, price: i.price ?? 0,
+      owned: p.wardrobe.includes(i.id), worn: p.outfit[i.slot] === i.id,
+      img: clawdSvg('idle', form, false, '', { ...bare, [i.slot]: i.id }),
+    })),
+    badges: BADGES.map(b => ({ name: b.name, hint: b.hint, owned: p.badges.includes(b.id) })),
+    badgesOwned: p.badges.length,
+    badgesTotal: BADGES.length,
+    pomo: {
+      phase: p.pomo.phase, endsAt: p.pomo.endsAt, round: p.pomo.round, today: log.pomos ?? 0, total: p.pomoTotal,
+      pomoMin: p.prefs.pomoMin, breakMin: p.prefs.breakMin,
+      breakLen: p.pomo.round === 0 ? p.prefs.longBreakMin : p.prefs.breakMin, // 长休息完 round 会归零
+    },
+  }
+  return { now, body: JSON.stringify(snap) }
+}
+
+/** 状态有变才写文件（就像有新消息才更新公告栏） */
+async function writeHubState($: EngineInterface, force = false) {
+  if (!hubOpen || hubStatePath === '') return
+  const { now, body } = await hubSnapshot($)
+  if (!force && body === hubLast) return
+  hubLast = body
+  await $.fs.write(hubStatePath, `{"now":${now},${body.slice(1)}`)
+}
+
+type HubAction = { type?: unknown; id?: unknown; what?: unknown }
+
+/** 窗口里按了按钮 → 照做（和 /pet 面板用同一套函数） */
+async function hubAction($: EngineInterface, a: HubAction) {
+  const id = typeof a.id === 'string' ? a.id : ''
+  switch (a.type) {
+    case 'pat':
+      await patClawd($)
+      break
+    case 'wake':
+      await setMood($, 'idle', { say: '我醒啦！' })
+      break
+    case 'feed': {
+      const food = FOODS.find(x => x.id === id)
+      if (food) await buyFood($, food)
+      break
+    }
+    case 'buy':
+      await buyItem($, id)
+      break
+    case 'wear': {
+      const item = ITEMS.find(i => i.id === id)
+      if (item) {
+        // 点穿着的那件 = 脱下；点别的 = 换上（只能穿拥有的）
+        await commit($, x =>
+          x.wardrobe.includes(id) ? { ...x, outfit: { ...x.outfit, [item.slot]: x.outfit[item.slot] === id ? '' : id } } : x,
+        )
+      }
+      break
+    }
+    case 'pomo-start':
+      await startPomo($)
+      break
+    case 'pomo-stop':
+      await stopPomo($)
+      break
+    case 'pomo-end':
+      await stopPomo($, '今天辛苦啦～')
+      break
+    case 'open':
+      if (a.what === 'settings') void openSettingsWindow($)
+      else if (a.what === 'dex') await $.ui.open({ id: DEX_PANE, title: 'Clawd 图鉴' })
+      else if (a.what === 'week') {
+        await update($, weekView, w => ({ ...w, refresh: w.refresh + 1, note: '' }))
+        await $.ui.open({ id: WEEK_PANE, title: 'Clawd 周报' })
+      }
+      break
+  }
+  await writeHubState($)
+}
+
+let hubUrl = ''
+
+/** 打开 Clawd 中心。返回 opened / reopened / unsupported */
+async function openHub($: EngineInterface): Promise<'opened' | 'reopened' | 'unsupported'> {
+  const { platform } = await $.session.info()
+  if (platform !== 'windows') return 'unsupported'
+  const data = (await $.process.hookEnv()).CLAUDE_PLUGIN_DATA ?? ''
+  if (data === '') return 'unsupported'
+  const root = $.plugin.root.replace(/\//g, '\\')
+  const script = `${root}\\tools\\hub.ps1`
+
+  // 柜台还开着（窗口可能被关了或藏在后面）→ 只重新打开窗口
+  if (hubOpen) {
+    if (hubUrl !== '') {
+      void $.process.run(['powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, '-OpenUrl', hubUrl, '-Data', data]).catch(() => undefined)
+    }
+    return 'reopened'
+  }
+
+  const sep = data.includes('\\') ? '\\' : '/'
+  hubOpen = true
+  hubLast = ''
+  hubUrl = ''
+  hubStatePath = `${data}${sep}hub-state.json`
+  await writeHubState($, true)
+
+  // 柜台在后台一直开着；窗口关掉后它自己会结束，这个循环也跟着结束
+  void (async () => {
+    let buf = ''
+    try {
+      const child = $.process.spawn({
+        argv: ['powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, '-Root', root, '-State', hubStatePath, '-Data', data],
+      })
+      for await (const piece of child) {
+        if (piece.stream !== 'stdout') continue
+        buf += piece.text
+        let nl = buf.indexOf('\n')
+        while (nl >= 0) {
+          const line = buf.slice(0, nl).trim()
+          buf = buf.slice(nl + 1)
+          if (line.startsWith('CLAWD_ACTION:')) {
+            try {
+              await hubAction($, JSON.parse(line.slice('CLAWD_ACTION:'.length)) as HubAction)
+            } catch {
+              // 看不懂的传话就当没听到
+            }
+          } else if (line.startsWith('CLAWD_HUB_URL:')) {
+            hubUrl = line.slice('CLAWD_HUB_URL:'.length)
+          } else if (line.startsWith('CLAWD_HUB_ERROR:')) {
+            $.ui.toast('Clawd：Clawd 中心打不开（找不到空的端口）')
+          }
+          nl = buf.indexOf('\n')
+        }
+      }
+    } catch {
+      $.ui.toast('Clawd：Clawd 中心出了点问题')
+    } finally {
+      hubOpen = false
+      hubUrl = ''
+    }
+  })()
+  return 'opened'
+}
+
 // =====================================================================
 // 👋 等你回复：Claude 问你问题、或者等你批准权限时，Clawd 举牌子 + 叮咚一声
 // =====================================================================
@@ -699,6 +899,7 @@ export const register: Register = on => {
     await $.command.register({ name: 'clawd-week', description: '打开 Clawd 周报：本周统计 + 一键生成周报草稿' })
     await $.command.register({ name: 'clawd-settings', description: '弹出 Clawd 设置窗口（Windows）' })
     await $.command.register({ name: 'clawd-pomo', description: '🍅 开始 / 停止番茄钟' })
+    await $.command.register({ name: 'clawd-hub', description: '🫧 打开 Clawd 中心（液态玻璃窗口：养成、任务、商店、衣柜、徽章）' })
     void $.ui.open({ id: PANE, title: TITLE })
 
     // 心跳：每 0.7 秒检查一次心情过期、肚子饿、睡觉、要不要演小剧场；约每 7 秒从存档同步一次
@@ -781,6 +982,9 @@ export const register: Register = on => {
           q.lastActive !== p.lastActive ? q : { ...q, mood, moodUntil, say, skit, skitUntil, nextSkitAt },
         )
       }
+
+      // 🫧 Clawd 中心开着的话，把最新状态写给它（没变就不写）
+      if (hubOpen) await writeHubState($)
     })
 
     return next(e)
@@ -805,6 +1009,16 @@ export const register: Register = on => {
     }
     await startPomo($)
     return { text: `🍅 开始专注 ${prefs.pomoMin} 分钟！再输入一次 /clawd-pomo 可以停止` }
+  })
+
+  on('command.run', { command: 'clawd-hub' }, async $ => {
+    const r = await openHub($)
+    return {
+      text:
+        r === 'opened' ? '🫧 Clawd 中心正在打开……（Edge 的独立窗口，几秒后出现）'
+        : r === 'reopened' ? '🫧 Clawd 中心本来就开着，帮你把窗口叫出来了'
+        : 'Clawd 中心目前只支持 Windows',
+    }
   })
 
   on('command.run', { command: 'clawd-settings' }, async $ => {
@@ -1024,14 +1238,7 @@ export const register: Register = on => {
             key="pat"
             label="摸摸头"
             hotkey="p"
-            onPress={async () => {
-              await setMood($, 'love', { holdMs: 4000 })
-              await commit($, s => ({ ...s, pets: s.pets + 1 }))
-              await logToday($, d => {
-                d.pets = (d.pets ?? 0) + 1
-              })
-              await checkQuests($)
-            }}
+            onPress={() => patClawd($)}
           />
           <Button
             key="snack"
@@ -1061,6 +1268,7 @@ export const register: Register = on => {
         {/* ===================== ⚙️ 设置：全部在弹出的 Windows 窗口里改 ===================== */}
         <Box flexDirection="row" gap={1} alignItems="center">
           <Button key="open-settings" label="⚙️ 打开设置窗口" hotkey="s" onPress={() => void openSettingsWindow($)} />
+          <Button key="open-hub" label="🫧 Clawd 中心" hotkey="h" onPress={() => void openHub($)} />
           <Text dimColor>
             {p.prefs.focus ? '🤫 专注中' : '🦀 普通'} · {p.prefs.sound ? '🔔 有声' : '🔕 静音'}
           </Text>

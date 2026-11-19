@@ -1,0 +1,383 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Clawd 中心</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 13 8'%3E%3Cpath fill='%23D97757' d='M2 0h9v4h2v1h-2v1H2V5H0V4h2z'/%3E%3Cpath fill='%23D97757' d='M3 6h1v2H3zM5 6h1v2H5zM7 6h1v2H7zM9 6h1v2H9z'/%3E%3Cpath fill='%23111' d='M4 2h1v2H4zM8 2h1v2H8z'/%3E%3C/svg%3E">
+<!--
+  Clawd 中心的店面。
+  数据：每 0.6 秒问柜台要一次 /state（Clawd 写的状态），有变化才重画那一页
+  按钮：POST /action → 柜台转告 Clawd → Clawd 改存档 → 下一次 /state 就看到结果
+-->
+<style>
+  :root {
+    --ink: #1d1d1f; --ink2: rgba(29, 29, 31, .62); --ink3: rgba(29, 29, 31, .4);
+    --claude: #d97757; --blue: #0a84ff; --green: #30d158; --red: #ff453a;
+    --glass: linear-gradient(140deg, rgba(255, 255, 255, .5), rgba(255, 255, 255, .18));
+    --glass-strong: linear-gradient(140deg, rgba(255, 255, 255, .72), rgba(255, 255, 255, .38));
+    --edge: rgba(255, 255, 255, .6);
+    --r: 26px;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Segoe UI Variable Text", "Microsoft YaHei UI", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body { color: var(--ink); background: #f3e6df; overflow: hidden; -webkit-font-smoothing: antialiased; user-select: none; }
+
+  /* ---------- 背景：会慢慢飘的彩色光斑（玻璃要有东西可以"透"才好看） ---------- */
+  .bg { position: fixed; inset: 0; overflow: hidden; z-index: 0; transition: filter 1.2s;
+        background: radial-gradient(120% 90% at 0% 0%, #ffd9c7 0%, transparent 55%),
+                    radial-gradient(90% 80% at 100% 10%, #cfe1ff 0%, transparent 60%),
+                    radial-gradient(100% 90% at 60% 100%, #ffe8a8 0%, transparent 55%), #f6ece6; }
+  .night .bg { filter: hue-rotate(185deg) saturate(.8) brightness(.92); }
+  .blob { position: absolute; border-radius: 50%; filter: blur(50px); opacity: .85; animation: drift 22s ease-in-out infinite alternate; }
+  .b1 { width: 460px; height: 460px; background: #f08a64; left: -80px; top: 120px; }
+  .b2 { width: 380px; height: 380px; background: #7fb2ff; right: -60px; top: -40px; animation-duration: 26s; }
+  .b3 { width: 420px; height: 420px; background: #ffc857; left: 40%; bottom: -160px; animation-duration: 30s; }
+  .b4 { width: 260px; height: 260px; background: #c39bff; left: 55%; top: 20%; animation-duration: 19s; opacity: .55; }
+  @keyframes drift { from { transform: translate(0, 0) scale(1); } to { transform: translate(60px, -40px) scale(1.12); } }
+
+  /* ---------- 液态玻璃 ---------- */
+  .glass { position: relative; background: var(--glass); border-radius: var(--r);
+           backdrop-filter: blur(26px) saturate(185%); -webkit-backdrop-filter: blur(26px) saturate(185%);
+           border: 1px solid var(--edge);
+           box-shadow: inset 0 1px 0 rgba(255, 255, 255, .9), inset 0 -1px 0 rgba(255, 255, 255, .25),
+                       0 1px 2px rgba(80, 40, 20, .06), 0 14px 40px rgba(80, 40, 20, .12); }
+  .glass::before { content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+                   background: radial-gradient(120% 60% at 15% 0%, rgba(255, 255, 255, .55), transparent 45%); mix-blend-mode: soft-light; }
+
+  .app { position: relative; z-index: 1; height: 100%; display: grid; grid-template-columns: 232px 1fr; gap: 18px; padding: 18px; }
+
+  .side { padding: 18px 12px; display: flex; flex-direction: column; gap: 4px; }
+  .me { display: flex; align-items: center; gap: 12px; padding: 6px 10px 18px; }
+  .me img { width: 48px; height: 42px; }
+  .me b { display: block; font-size: 17px; letter-spacing: -.01em; }
+  .me span { font-size: 12px; color: var(--ink2); }
+  .nav { all: unset; cursor: pointer; display: flex; align-items: center; gap: 11px; padding: 9px 12px; border-radius: 14px;
+         font-size: 14px; color: var(--ink); transition: background .25s; }
+  .nav:hover { background: rgba(255, 255, 255, .35); }
+  .nav .ic { width: 26px; height: 26px; border-radius: 8px; display: grid; place-items: center; font-size: 14px;
+             box-shadow: inset 0 1px 0 rgba(255, 255, 255, .5), 0 2px 6px rgba(0, 0, 0, .12); }
+  .nav.on { background: rgba(255, 255, 255, .75); box-shadow: 0 6px 18px rgba(80, 40, 20, .12), inset 0 1px 0 #fff; font-weight: 600; }
+  .nav .out { margin-left: auto; color: var(--ink3); font-size: 12px; }
+  .side .sep { height: 1px; background: rgba(0, 0, 0, .06); margin: 8px 12px; }
+  .side .foot { margin-top: auto; padding: 10px 12px; font-size: 11px; color: var(--ink3); line-height: 1.5; }
+
+  .main { overflow: auto; padding: 6px 6px 40px; scrollbar-width: thin; }
+  .page { display: none; }
+  .page.on { display: block; animation: rise .45s cubic-bezier(.2, .8, .2, 1); }
+  @keyframes rise { from { opacity: 0; transform: translateY(10px) scale(.99); } to { opacity: 1; transform: none; } }
+  h1 { font-size: 30px; letter-spacing: -.02em; margin: 14px 4px 18px; }
+  h2 { font-size: 15px; margin: 26px 6px 10px; color: var(--ink2); font-weight: 600; }
+  .grid { display: grid; gap: 14px; }
+  .card { padding: 18px 20px; }
+  .muted { color: var(--ink2); font-size: 13px; }
+
+  .hero { display: grid; grid-template-columns: 220px 1fr; gap: 26px; align-items: center; padding: 26px 28px; }
+  .stage { height: 190px; border-radius: 22px; display: grid; place-items: center;
+           background: radial-gradient(70% 60% at 50% 70%, rgba(255, 255, 255, .7), rgba(255, 255, 255, .15)); }
+  .stage img { width: 190px; filter: drop-shadow(0 10px 14px rgba(120, 60, 30, .25)); cursor: pointer; }
+  .stage img.boing { animation: boing .5s cubic-bezier(.3, 1.6, .5, 1); }
+  @keyframes boing { 30% { transform: scale(1.08, .9); } 60% { transform: scale(.95, 1.06); } }
+  .name { display: flex; align-items: baseline; gap: 10px; }
+  .name b { font-size: 28px; letter-spacing: -.02em; }
+  .chip { font-size: 12px; padding: 3px 10px; border-radius: 99px; background: rgba(217, 119, 87, .16); color: #b45a3c; font-weight: 600; }
+  .say { margin: 6px 0 16px; font-size: 15px; color: var(--ink2); min-height: 20px; }
+  .bar { height: 10px; border-radius: 99px; background: rgba(0, 0, 0, .07); overflow: hidden; box-shadow: inset 0 1px 2px rgba(0, 0, 0, .08); }
+  .bar i { display: block; height: 100%; border-radius: inherit; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .6); transition: width .6s; }
+  .stat { display: grid; grid-template-columns: 54px 1fr 70px; align-items: center; gap: 10px; font-size: 13px; margin: 9px 0; }
+  .stat em { font-style: normal; color: var(--ink2); text-align: right; font-variant-numeric: tabular-nums; }
+  .pills { display: flex; gap: 10px; margin-top: 16px; flex-wrap: wrap; }
+
+  .btn { all: unset; cursor: pointer; padding: 9px 16px; border-radius: 99px; font-size: 13px; font-weight: 600; text-align: center;
+         background: var(--glass-strong); border: 1px solid var(--edge); backdrop-filter: blur(16px);
+         box-shadow: inset 0 1px 0 #fff, 0 4px 14px rgba(80, 40, 20, .1); transition: transform .18s cubic-bezier(.3, 1.6, .5, 1); }
+  .btn:hover { transform: translateY(-1px) scale(1.03); }
+  .btn:active { transform: scale(.95, .9); }
+  .btn.blue { background: linear-gradient(180deg, #3d9bff, #0a7aff); color: #fff; border-color: rgba(255, 255, 255, .35); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .5), 0 6px 16px rgba(10, 122, 255, .35); }
+  .btn.red { background: linear-gradient(180deg, #ff7a6e, #ff453a); color: #fff; border-color: rgba(255, 255, 255, .35); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .5), 0 6px 16px rgba(255, 69, 58, .3); }
+  .btn.dim { opacity: .45; }
+
+  .kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-top: 14px; }
+  .kpi { padding: 14px 18px; }
+  .kpi b { display: block; font-size: 24px; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+  .kpi span { font-size: 12px; color: var(--ink2); }
+
+  .quest { display: grid; grid-template-columns: 52px 1fr auto; gap: 14px; align-items: center; padding: 14px 18px; }
+  .ring { --p: 0; width: 46px; height: 46px; border-radius: 50%; display: grid; place-items: center; font-size: 11px; font-weight: 700;
+          background: conic-gradient(var(--claude) calc(var(--p) * 1%), rgba(0, 0, 0, .08) 0); }
+  .ring::after { content: attr(data-t); width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center; background: rgba(255, 255, 255, .85); }
+  .ring.done { background: conic-gradient(var(--green) 100%, transparent 0); }
+  .reward { font-size: 12px; color: var(--ink2); text-align: right; }
+
+  .tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(148px, 1fr)); gap: 14px; }
+  .tile { padding: 14px; text-align: center; display: flex; flex-direction: column; align-items: center; gap: 6px; transition: transform .25s; }
+  .tile.click { cursor: pointer; }
+  .tile.click:hover { transform: translateY(-3px); }
+  .tile.click:active { transform: scale(.96); }
+  .tile img { width: 84px; }
+  .tile b { font-size: 13px; }
+  .tile small { font-size: 11px; color: var(--ink2); min-height: 28px; }
+  .tile.locked { filter: grayscale(.9); opacity: .55; }
+  .tile.worn { outline: 2px solid var(--blue); outline-offset: -2px; }
+  .food { font-size: 40px; line-height: 64px; }
+  .medal { width: 64px; height: 64px; border-radius: 50%; display: grid; place-items: center; font-size: 30px;
+           background: radial-gradient(circle at 35% 30%, #fff6c9, #ffcf4a 55%, #e0a11b); box-shadow: inset 0 2px 0 rgba(255, 255, 255, .8), 0 6px 14px rgba(200, 140, 20, .35); }
+  .locked .medal { background: radial-gradient(circle at 35% 30%, #fff, #d6d6db 60%, #b8b8bf); box-shadow: none; }
+
+  .clock { width: 200px; height: 200px; border-radius: 50%; display: grid; place-items: center; box-shadow: 0 12px 30px rgba(255, 80, 60, .2); }
+  .clock > div { width: 172px; height: 172px; border-radius: 50%; background: rgba(255, 255, 255, .85); display: grid; place-items: center; text-align: center; }
+  .clock b { font-size: 42px; letter-spacing: -.03em; font-variant-numeric: tabular-nums; display: block; }
+
+  .toast { position: fixed; left: 50%; bottom: 26px; transform: translate(-50%, 30px); opacity: 0; z-index: 9; padding: 10px 18px; font-size: 13px; transition: .35s cubic-bezier(.3, 1.4, .5, 1); }
+  .toast.on { transform: translate(-50%, 0); opacity: 1; }
+  .offline { position: fixed; inset: 0; z-index: 20; display: none; place-items: center; background: rgba(246, 236, 230, .6); backdrop-filter: blur(8px); font-size: 15px; color: var(--ink2); text-align: center; }
+  .offline.on { display: grid; }
+
+  @media (prefers-reduced-motion: reduce) { .blob, .page.on { animation: none; } }
+</style>
+</head>
+<body>
+<div class="bg"><div class="blob b1"></div><div class="blob b2"></div><div class="blob b3"></div><div class="blob b4"></div></div>
+<div class="app">
+  <nav class="side glass" id="side">
+    <div class="me"><img id="me-img" alt=""><div><b>Clawd</b><span id="me-sub">连接中…</span></div></div>
+  </nav>
+  <main class="main" id="main"></main>
+</div>
+<div class="toast glass" id="toast"></div>
+<div class="offline" id="offline"><div>🦀 Clawd 不在线<br><small>回到 Claude 里输入 /clawd-hub 重新打开</small></div></div>
+
+<script>
+const TOKEN = new URLSearchParams(location.search).get('t') || ''
+const $ = s => document.querySelector(s)
+const el = (tag, cls, html) => { const e = document.createElement(tag); if (cls) e.className = cls; if (html != null) e.innerHTML = html; return e }
+const svg = s => 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(s || '')
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c])
+const pct = (a, b) => (b > 0 ? Math.max(0, Math.min(100, Math.round((a / b) * 100))) : 0)
+
+// 页面：[id, 名字, 图标, 颜色]；out = 在 Claude 里打开（第 2 步会搬进来）
+const PAGES = [
+  ['home', '首页', '🦀', '#ff9f7a'], ['quests', '每日任务', '📅', '#ffcf5c'], ['pomo', '番茄钟', '🍅', '#ff7b72'],
+  ['shop', '商店', '🛍️', '#7cc6ff'], ['wardrobe', '衣柜', '👗', '#c9a6ff'], ['badges', '徽章', '🏅', '#ffd66b'],
+]
+const OUTS = [['dex', '图鉴', '📖', '#8be0b0'], ['week', '周报', '📋', '#9fb7ff'], ['settings', '设置', '⚙️', '#c7c7cc']]
+
+let S = null          // 最新状态
+let skew = 0          // Clawd 的时钟 - 这边的时钟
+let current = 'home'
+const sigs = {}       // 每一页上次画的时候用的数据（没变就不重画）
+
+// ---------- 传话给 Clawd ----------
+async function act(type, extra = {}) {
+  try {
+    await fetch('/action?t=' + TOKEN, { method: 'POST', body: JSON.stringify({ type, ...extra }) })
+    setTimeout(poll, 150)
+  } catch { offline(true) }
+}
+function toast(msg) {
+  const t = $('#toast'); t.textContent = msg; t.classList.add('on')
+  clearTimeout(toast.timer); toast.timer = setTimeout(() => t.classList.remove('on'), 2200)
+}
+function offline(on) { $('#offline').classList.toggle('on', on) }
+
+// ---------- 侧边栏 ----------
+for (const [id, name, ic, color] of PAGES) {
+  const b = el('button', 'nav', `<span class="ic" style="background:${color}">${ic}</span>${name}`)
+  b.dataset.id = id; b.onclick = () => show(id); $('#side').appendChild(b)
+  const sec = el('section', 'page'); sec.id = 'p-' + id; $('#main').appendChild(sec)
+}
+$('#side').appendChild(el('div', 'sep'))
+for (const [id, name, ic, color] of OUTS) {
+  const b = el('button', 'nav', `<span class="ic" style="background:${color}">${ic}</span>${name}<span class="out">↗</span>`)
+  b.title = '在 Claude 里打开'
+  b.onclick = () => { act('open', { what: id }); toast(id === 'settings' ? '⚙️ 设置窗口打开中…' : `已在 Claude 里打开${name}`) }
+  $('#side').appendChild(b)
+}
+$('#side').appendChild(el('div', 'foot', '全部在本地运行<br>不消耗 token'))
+
+function show(id) {
+  current = id
+  document.querySelectorAll('.nav[data-id]').forEach(n => n.classList.toggle('on', n.dataset.id === id))
+  document.querySelectorAll('.page').forEach(p => p.classList.toggle('on', p.id === 'p-' + id))
+  render(true)
+}
+
+// ---------- 每一页怎么画 ----------
+function greet() { const h = new Date().getHours(); return h < 5 ? '夜深了 🌙' : h < 11 ? '早上好 👋' : h < 14 ? '中午好 ☀️' : h < 18 ? '下午好 ☕' : h < 23 ? '晚上好 🌆' : '夜深了 🌙' }
+
+const VIEWS = {
+  home: {
+    sig: s => [s.lv, s.formLabel, s.formNext, s.xpIn, s.xpNeed, Math.round(s.fullness), s.coins, s.streak, s.questsDone, s.badgesOwned, s.badgesTotal, s.pomo.phase, s.foods[0]?.price],
+    html: s => `
+      <h1>${greet()}</h1>
+      <div class="glass hero">
+        <div class="stage"><img id="hero-img" alt="Clawd" title="摸摸头"></div>
+        <div>
+          <div class="name"><b>Clawd</b><span class="chip">Lv.${s.lv} · ${esc(s.formLabel)}</span><span class="chip" id="mood-chip"></span></div>
+          <div class="say" id="say"></div>
+          <div class="stat">经验<div class="bar"><i style="width:${pct(s.xpIn, s.xpNeed)}%;background:linear-gradient(90deg,#ffb38f,var(--claude))"></i></div><em>${s.xpIn}/${s.xpNeed}</em></div>
+          <div class="stat">饱食度<div class="bar"><i style="width:${Math.round(s.fullness)}%;background:linear-gradient(90deg,${s.hungry ? '#ffb0a8,var(--red)' : '#9be7a4,var(--green)'})"></i></div><em>${Math.round(s.fullness)}%</em></div>
+          <div class="muted" style="margin-top:4px">${esc(s.formNext)}</div>
+          <div class="pills">
+            <button class="btn" data-act="pat">🫳 摸摸头</button>
+            <button class="btn" data-act="feed" data-id="${esc(s.foods[0]?.id)}">${esc(s.foods[0]?.emoji)} 喂${esc(s.foods[0]?.name)} · ${s.foods[0]?.price}💰</button>
+            <button class="btn" data-act="wake">☀️ 叫醒</button>
+            ${s.pomo.phase === 'idle' ? '<button class="btn blue" data-act="pomo-start">🍅 开始番茄钟</button>' : '<button class="btn" data-go="pomo">🍅 番茄钟进行中</button>'}
+          </div>
+        </div>
+      </div>
+      <div class="kpis">
+        <div class="glass kpi"><b>${s.coins}</b><span>💰 金币</span></div>
+        <div class="glass kpi"><b>${s.streak} 天</b><span>🔥 连续打卡</span></div>
+        <div class="glass kpi"><b>${s.questsDone}/3</b><span>📅 今日任务</span></div>
+        <div class="glass kpi"><b>${s.badgesOwned}/${s.badgesTotal}</b><span>🏅 徽章</span></div>
+      </div>`,
+  },
+  quests: {
+    sig: s => [s.quests, s.allDone],
+    html: s => `
+      <h1>每日任务</h1>
+      <div class="grid">${s.quests.map(q => `
+        <div class="glass quest">
+          <div class="ring ${q.done ? 'done' : ''}" style="--p:${pct(Math.min(q.now, q.target), q.target)}" data-t="${q.done ? '✓' : Math.min(q.now, q.target) + '/' + q.target}"></div>
+          <div><b style="font-size:15px">${esc(q.text)}</b><div class="muted">${q.done ? '完成啦，奖励已经发了' : '还差 ' + (q.target - Math.min(q.now, q.target))}</div></div>
+          <div class="reward">+${q.coins} 💰<br>+${q.xp} XP</div>
+        </div>`).join('')}
+      </div>
+      <h2>全部完成大奖</h2>
+      <div class="glass card" style="display:flex;justify-content:space-between;align-items:center">
+        <div><b>${s.allDone ? '🏆 今天全部完成！' : '三个都完成'}</b><div class="muted">每天的任务按日期抽，明天会换新的</div></div>
+        <div class="reward">+${s.allCoins} 💰 · +${s.allXp} XP</div>
+      </div>`,
+  },
+  pomo: {
+    sig: s => [s.pomo.phase, s.pomo.round, s.pomo.today, s.pomo.pomoMin, s.pomo.breakMin, s.pomo.total],
+    html: s => {
+      const ph = s.pomo.phase
+      const color = ph === 'break' ? 'var(--green)' : '#ff6b5e'
+      return `
+      <h1>番茄钟</h1>
+      <div class="glass card" style="display:grid;grid-template-columns:220px 1fr;gap:28px;align-items:center;padding:28px">
+        <div class="clock" id="clock" style="background:conic-gradient(${color} 0%,rgba(0,0,0,.07) 0)"><div><div><b id="clock-t">${s.pomo.pomoMin}:00</b><span class="muted">${ph === 'focus' ? `专注中 · 第 ${s.pomo.round + 1} 个` : ph === 'break' ? '休息一下 ☕' : '准备好了吗？'}</span></div></div></div>
+        <div>
+          <b style="font-size:20px">${ph === 'focus' ? '保持专注 🍅' : ph === 'break' ? '喝口水，伸个懒腰' : '开始一个番茄'}</b>
+          <p class="muted">${s.pomo.pomoMin} 分钟专注 → ${s.pomo.breakMin} 分钟休息，每 4 个番茄长休息一次。期间完成过对话，就有 +15 💰 +10 XP。专注时 Clawd 会自动进入专注模式。</p>
+          <div class="pills">${ph === 'focus' ? '<button class="btn red" data-act="pomo-stop">⏹ 停止这个番茄</button>'
+            : ph === 'break' ? '<button class="btn blue" data-act="pomo-start">▶ 直接开下一个</button><button class="btn" data-act="pomo-end">结束番茄钟</button>'
+            : '<button class="btn blue" data-act="pomo-start">▶ 开始专注</button>'}</div>
+          <h2 style="margin-left:0">今天完成 ${s.pomo.today} 个 · 累计 ${s.pomo.total} 个</h2>
+          <div style="font-size:26px;letter-spacing:4px">${'🍅'.repeat(Math.min(s.pomo.today, 12)) || '<span class="muted" style="font-size:13px;letter-spacing:0">还没有番茄</span>'}</div>
+        </div>
+      </div>`
+    },
+  },
+  shop: {
+    sig: s => [s.coins, s.foods, s.items.filter(i => i.price).map(i => [i.id, i.owned, i.img.length])],
+    html: s => `
+      <h1>商店 <span class="chip" style="font-size:14px;vertical-align:middle">💰 ${s.coins}</span></h1>
+      <h2>零食 · 恢复饱食度</h2>
+      <div class="tiles">${s.foods.map(f => `
+        <div class="glass tile"><div class="food">${esc(f.emoji)}</div><b>${esc(f.name)}</b><small>饱食度 +${f.food}</small>
+        <button class="btn ${s.coins >= f.price ? 'blue' : 'dim'}" data-act="feed" data-id="${esc(f.id)}">${f.price} 💰</button></div>`).join('')}
+      </div>
+      <h2>限定装扮 · 买了马上穿上</h2>
+      <div class="tiles">${s.items.filter(i => i.price).map(i => `
+        <div class="glass tile"><img src="${svg(i.img)}" alt=""><b>${esc(i.name)}</b><small>${esc(i.slotLabel)}</small>
+        ${i.owned ? '<button class="btn dim">已拥有</button>' : `<button class="btn ${s.coins >= i.price ? 'blue' : 'dim'}" data-act="buy" data-id="${esc(i.id)}">${i.price} 💰</button>`}</div>`).join('')}
+      </div>`,
+  },
+  wardrobe: {
+    sig: s => s.items.map(i => [i.id, i.owned, i.worn, i.img.length]),
+    html: s => `
+      <h1>衣柜</h1>
+      ${['head', 'face', 'neck'].map(slot => `
+        <h2>${{ head: '头饰', face: '脸部', neck: '颈部' }[slot]}</h2>
+        <div class="tiles">${s.items.filter(i => i.slot === slot).map(i => `
+          <div class="glass tile ${i.owned ? 'click' : 'locked'} ${i.worn ? 'worn' : ''}" ${i.owned ? `data-act="wear" data-id="${esc(i.id)}" data-slot="${slot}"` : ''}>
+            <img src="${svg(i.img)}" alt=""><b>${esc(i.name)}</b>
+            <small>${i.owned ? (i.worn ? '✓ 穿着中 · 点一下脱下' : '点一下穿上') : '🔒 ' + esc(i.hint)}</small></div>`).join('')}
+        </div>`).join('')}`,
+  },
+  badges: {
+    sig: s => s.badges,
+    html: s => `
+      <h1>徽章 <span class="muted" style="font-size:16px">${s.badgesOwned} / ${s.badgesTotal}</span></h1>
+      <div class="tiles">${s.badges.map(b => `
+        <div class="glass tile ${b.owned ? '' : 'locked'}"><div class="medal">${b.owned ? '🏅' : '🔒'}</div><b>${esc(b.name)}</b><small>${esc(b.hint)}</small></div>`).join('')}
+      </div>`,
+  },
+}
+
+function render(force = false) {
+  if (!S) return
+  document.body.classList.toggle('night', !!S.night)
+  $('#me-sub').textContent = `Lv.${S.lv} · ${S.formLabel}`
+  setImg($('#me-img'), S.avatar)
+  // 只画正在看的那一页；数据没变就不重画（滚动位置、动画都不会被打断）
+  const sig = JSON.stringify(VIEWS[current].sig(S))
+  if (force || sigs[current] !== sig) {
+    sigs[current] = sig
+    const main = $('#main'), top = main.scrollTop
+    $('#p-' + current).innerHTML = VIEWS[current].html(S)
+    main.scrollTop = top
+  }
+  // 会一直变的小东西：不用重画整页
+  const hero = $('#hero-img'); if (hero) setImg(hero, S.hero)
+  const say = $('#say'); if (say) say.textContent = S.say
+  const chip = $('#mood-chip'); if (chip) chip.textContent = S.moodLabel
+  tick()
+}
+function setImg(img, s) { if (img.dataset.k !== String(s.length) + s.slice(-80)) { img.dataset.k = String(s.length) + s.slice(-80); img.src = svg(s) } }
+
+// 番茄钟倒计时：每秒自己算，不用等 Clawd
+function tick() {
+  const t = $('#clock-t'); if (!t || !S) return
+  const p = S.pomo
+  if (p.phase === 'idle') { t.textContent = `${p.pomoMin}:00`; $('#clock').style.background = 'conic-gradient(#ff6b5e 0%,rgba(0,0,0,.07) 0)'; return }
+  const left = Math.max(0, p.endsAt - (Date.now() + skew))
+  const m = Math.floor(left / 60000), sec = Math.floor((left % 60000) / 1000)
+  t.textContent = `${m}:${String(sec).padStart(2, '0')}`
+  const whole = (p.phase === 'focus' ? p.pomoMin : p.breakLen) * 60000
+  $('#clock').style.background = `conic-gradient(${p.phase === 'break' ? 'var(--green)' : '#ff6b5e'} ${100 - pct(left, whole)}%,rgba(0,0,0,.07) 0)`
+}
+setInterval(tick, 1000)
+
+// ---------- 所有按钮都在这里接 ----------
+document.addEventListener('click', e => {
+  const b = e.target.closest('[data-act],[data-go],#hero-img')
+  if (!b) return
+  if (b.id === 'hero-img') { b.classList.remove('boing'); void b.offsetWidth; b.classList.add('boing'); return act('pat') }
+  if (b.dataset.go) return show(b.dataset.go)
+  const a = b.dataset.act
+  if (a === 'pat') { const h = $('#hero-img'); if (h) { h.classList.remove('boing'); void h.offsetWidth; h.classList.add('boing') } }
+  if (a === 'feed' || a === 'buy') {
+    const price = a === 'feed' ? S.foods.find(f => f.id === b.dataset.id)?.price : S.items.find(i => i.id === b.dataset.id)?.price
+    if (price > S.coins) return toast(`还差 ${price - S.coins} 💰……多用用 Claude Code 吧`)
+  }
+  act(a, { id: b.dataset.id, slot: b.dataset.slot })
+})
+
+// ---------- 每 0.6 秒问一次柜台 ----------
+let lastText = '', fails = 0
+async function poll() {
+  try {
+    const r = await fetch('/state?t=' + TOKEN, { cache: 'no-store' })
+    if (r.status === 503) return
+    if (!r.ok) throw new Error(r.status)
+    const text = await r.text()
+    fails = 0; offline(false)
+    if (text === lastText || text === '{}') return
+    lastText = text
+    S = JSON.parse(text)
+    skew = S.now - Date.now()
+    render()
+  } catch { if (++fails > 4) offline(true) }
+}
+setInterval(poll, 600)
+poll()
+show('home')
+addEventListener('pagehide', () => navigator.sendBeacon('/bye?t=' + TOKEN))
+</script>
+</body>
+</html>
