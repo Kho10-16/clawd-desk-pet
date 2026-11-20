@@ -601,6 +601,8 @@ async function finishPomoPhase($: EngineInterface, expectedEndsAt: number) {
   let breakMin = 0
   let isLong = false
   let done: PomoRecord | null = null
+  // Claude 关着的时候时间到了：等你打开 Claude 才发现。晚太多的话就不补休息了，直接结束（奖励照发）
+  let late = false
 
   await commit(
     $,
@@ -618,16 +620,21 @@ async function finishPomoPhase($: EngineInterface, expectedEndsAt: number) {
             done: true, earned, taskId: s.pomo.taskId,
           }
         }
+        late = now - s.pomo.endsAt > breakMin * 60000
         return {
           ...s,
           coins: s.coins + (earned ? COIN_POMO : 0),
           xp: s.xp + (earned ? XP_POMO : 0),
           pomoTotal: s.pomoTotal + (earned ? 1 : 0),
-          pomo: { ...s.pomo, phase: 'break', endsAt: now + breakMin * 60000, round: isLong ? 0 : round },
+          pomo: late
+            ? { ...POMO_IDLE, round: isLong ? 0 : round }
+            : { ...s.pomo, phase: 'break', endsAt: now + breakMin * 60000, round: isLong ? 0 : round },
+          prefs: late ? { ...s.prefs, focus: s.pomo.prevFocus } : s.prefs,
         }
       }
       // 休息结束
       what = 'breakDone'
+      late = now - s.pomo.endsAt > 60000
       return { ...s, pomo: { ...POMO_IDLE, round: s.pomo.round }, prefs: { ...s.prefs, focus: s.pomo.prevFocus } }
     },
     { isUse: true },
@@ -640,13 +647,18 @@ async function finishPomoPhase($: EngineInterface, expectedEndsAt: number) {
     if (earned) await logToday($, d => {
       d.pomos = (d.pomos ?? 0) + 1
     })
-    const msg = earned
-      ? `🍅 番茄完成！+${COIN_POMO}💰 +${XP_POMO} XP。${isLong ? '连续 4 个了，' : ''}休息 ${breakMin} 分钟，喝口水、站起来走走吧`
-      : `🍅 时间到！这段时间没有完成对话，就不发奖励啦。休息 ${breakMin} 分钟吧`
+    const isLate = late as boolean // TS 看不出它在上面的函数里被改过
+    const msg = isLate
+      ? earned
+        ? `🍅 你不在的时候完成了一个番茄！+${COIN_POMO}💰 +${XP_POMO} XP 补发给你`
+        : '🍅 你不在的时候有一个番茄时间到了（这段时间没有完成对话，就不发奖励啦）'
+      : earned
+        ? `🍅 番茄完成！+${COIN_POMO}💰 +${XP_POMO} XP。${isLong ? '连续 4 个了，' : ''}休息 ${breakMin} 分钟，喝口水、站起来走走吧`
+        : `🍅 时间到！这段时间没有完成对话，就不发奖励啦。休息 ${breakMin} 分钟吧`
     $.ui.toast(`Clawd：${msg}`) // 番茄钟的提醒就算在专注模式也要弹
     await setMood($, 'happy', { holdMs: 8000, say: msg })
     if (prefs.sound) void playSound($, 'achievement')
-  } else if (what === 'breakDone') {
+  } else if (what === 'breakDone' && !(late as boolean)) {
     $.ui.toast('Clawd：☕ 休息结束！要开始下一个番茄吗？（/clawd-pomo）')
     await setMood($, 'happy', { holdMs: 8000, say: '☕ 休息结束！准备好开始下一个番茄了吗？' })
     if (prefs.sound) void playSound($, 'nudge')
@@ -1085,18 +1097,30 @@ async function openHub($: EngineInterface): Promise<'opened' | 'reopened' | 'uns
 let isWindows = false
 
 /**
- * 桌面小助手：一个 C# 小程序（tools/desktop/ClawdDesktop.cs）同时管灵动岛和桌宠。
+ * 🖥 桌面 app：一个 C# 小程序（tools/desktop/ClawdDesktop.cs）管灵动岛、桌宠和托盘图标。
  * 第一次用时用 Windows 自带的 csc.exe 编译成 exe，放在插件资料夹；源代码变了才重新编译。
+ *
+ * 它不是 Claude 的子进程（用 WMI 启动），所以关掉 Claude 它也还在，还可以在托盘里设成开机自动启动——
+ * 像市面上的桌宠一样。Claude 开着时，这里负责：
+ *   - 写 desktop-state.json（灵动岛 / 桌宠该长什么样；至少每 10 秒写一次，app 靠它知道 Claude 还开着）
+ *   - 读 desktop-actions.txt（app 那边按的按钮），处理完写 desktop-ack.txt
+ *   - app 没在跑就把它叫起来；exe 换了新版本就请旧的关掉
+ * 好几个聊天同时开着：用 desktop-owner.txt 当"值班表"，只有一个聊天做这些事。
  */
 const desktop = {
-  running: false,
-  path: '',
-  last: '',
-  triedAt: 0,
-  retryMs: 120000, // 没开成的话，多久再试（被别的聊天占着时缩短成 15 秒）
-  wanted: false,
+  dir: '',
   exe: '',
-  child: null as ReturnType<EngineInterface['process']['spawn']> | null,
+  last: '',
+  lastWriteAt: 0,
+  me: Math.random().toString(36).slice(2, 10), // 这个聊天的值班编号
+  leader: false,
+  leaseAt: 0,
+  checkedAt: 0,
+  launchedAt: 0,
+  quitWaitUntil: 0, // 请旧版本关掉后，先别写状态（免得把"请关掉"盖掉）
+  startedAt: 0, // 这个聊天开始的时间：你在托盘按"退出"之后，这次就不再自动叫它出来
+  ack: '',
+  actionsMtime: 0,
 }
 
 /** 简单的指纹：源代码一变，exe 名字就变，所以会重新编译 */
@@ -1144,92 +1168,133 @@ async function buildDesktopExe($: EngineInterface, data: string): Promise<string
   return r.exitCode === 0 && (await $.fs.exists(exe)) ? exe : ''
 }
 
-/** 内容变了才写文件（now 不算在"有没有变"里面） */
-async function writeDesktop($: EngineInterface, data: Record<string, unknown>) {
-  if (desktop.path === '') return
-  const body = JSON.stringify(data)
-  if (body === desktop.last) return
-  desktop.last = body
-  await $.fs.write(desktop.path, `{"now":${await $.clock.now()},${body.slice(1)}`)
+async function readText($: EngineInterface, path: string): Promise<string> {
+  try {
+    return (await $.fs.exists(path)) ? String(await $.fs.read(path)) : ''
+  } catch {
+    return ''
+  }
 }
 
-async function startDesktop($: EngineInterface, first: Record<string, unknown>) {
-  if (desktop.running) return
-  desktop.triedAt = await $.clock.now()
-  desktop.retryMs = 120000
-  if (!isWindows) return
-  const data = (await $.process.hookEnv()).CLAUDE_PLUGIN_DATA ?? ''
-  if (data === '') return
-  desktop.running = true
-  try {
-    desktop.exe = await ensureDesktopExe($, data)
-  } catch {
-    desktop.exe = ''
+/** 动作编号是 .NET 的 ticks（18 位数），超过 JS 数字的精度，所以用补零后的字符串比大小 */
+function seqGt(a: string, b: string): boolean {
+  return a.padStart(20, '0') > b.padStart(20, '0')
+}
+
+/** 值班表：只有一个聊天负责桌面 app。15 秒没人续班，就换人 */
+async function holdLease($: EngineInterface, now: number): Promise<boolean> {
+  if (desktop.leader && now - desktop.leaseAt < 5000) return true
+  const file = `${desktop.dir}\\desktop-owner.txt`
+  const [id = '', ts = '0'] = (await readText($, file)).split('\t')
+  if (id === desktop.me || id === '' || now - Number(ts) > 15000) {
+    await $.fs.write(file, `${desktop.me}\t${now}`)
+    desktop.leader = true
+    desktop.leaseAt = now
+    return true
   }
-  if (desktop.exe === '') {
-    desktop.running = false
-    $.ui.toast('Clawd：桌面小助手编译失败，灵动岛和桌宠暂时出不来')
+  desktop.leader = false
+  return false
+}
+
+/** app 那边按的按钮：信箱里比回执新的，一条一条照做 */
+async function readDesktopActions($: EngineInterface) {
+  const file = `${desktop.dir}\\desktop-actions.txt`
+  const ackFile = `${desktop.dir}\\desktop-ack.txt`
+  if (desktop.ack === '') desktop.ack = (await readText($, ackFile)).trim() || '0'
+  if (!(await $.fs.exists(file))) return
+  const st = await $.fs.stat(file)
+  if (st.mtimeMs === desktop.actionsMtime) return
+  desktop.actionsMtime = st.mtimeMs
+  const lines = (await readText($, file)).split('\n')
+  lines.pop() // 最后一段可能还没写完（或是空的）
+  let max = desktop.ack
+  for (const line of lines) {
+    const tab = line.indexOf('\t')
+    if (tab <= 0) continue
+    const seq = line.slice(0, tab).trim()
+    if (!seqGt(seq, desktop.ack)) continue
+    if (seqGt(seq, max)) max = seq
+    try {
+      await hubAction($, JSON.parse(line.slice(tab + 1)) as HubAction)
+    } catch {
+      // 看不懂的传话就当没听到
+    }
+  }
+  if (max !== desktop.ack) {
+    desktop.ack = max
+    await $.fs.write(ackFile, max)
+  }
+}
+
+/** 确保桌面 app 在跑，而且是最新版本 */
+async function ensureDesktopApp($: EngineInterface, now: number) {
+  let exe = ''
+  try {
+    exe = await ensureDesktopExe($, desktop.dir)
+  } catch {
+    exe = ''
+  }
+  if (exe === '') {
+    if (desktop.launchedAt === 0) $.ui.toast('Clawd：桌面小助手编译失败，灵动岛和桌宠暂时出不来')
+    desktop.launchedAt = now
     return
   }
-  desktop.path = `${data}\\desktop-state.json`
-  desktop.last = ''
-  await writeDesktop($, first)
-  void (async () => {
-    let buf = ''
-    try {
-      const child = $.process.spawn({ argv: [desktop.exe, '--state', desktop.path] })
-      desktop.child = child
-      for await (const piece of child) {
-        if (piece.stream !== 'stdout') continue
-        buf += piece.text
-        let nl = buf.indexOf('\n')
-        while (nl >= 0) {
-          const line = buf.slice(0, nl).trim()
-          buf = buf.slice(nl + 1)
-          if (line === 'CLAWD_DESKTOP_BUSY') desktop.retryMs = 15000 // 别的聊天开着一个：15 秒后再看看
-          if (line.startsWith('CLAWD_ACTION:')) {
-            try {
-              await hubAction($, JSON.parse(line.slice('CLAWD_ACTION:'.length)) as HubAction)
-            } catch {
-              // 看不懂的传话就当没听到
-            }
-          }
-          nl = buf.indexOf('\n')
-        }
-      }
-    } catch {
-      // 小助手关掉了 / 没开成：心跳过一阵会再试
-    } finally {
-      desktop.running = false
-      desktop.child = null
+  desktop.exe = exe
+  const [pid = '', path = '', ts = '0'] = (await readText($, `${desktop.dir}\\desktop-alive.txt`)).split('\t')
+  const alive = pid !== '' && now - Number(ts) < 15000
+  if (alive && path.toLowerCase() === exe.toLowerCase()) return
+  if (alive) {
+    // 旧版本在跑：请它关掉，等它让位后再开新版本
+    if (now > desktop.quitWaitUntil) {
+      desktop.quitWaitUntil = now + 8000
+      desktop.last = ''
+      await $.fs.write(`${desktop.dir}\\desktop-state.json`, `{"now":${now},"quit":true}`)
     }
-  })()
+    return
+  }
+  // 没在跑：你这次在托盘按过"退出"的话就不叫它
+  const quitAt = Number((await readText($, `${desktop.dir}\\desktop-quit.txt`)).trim()) || 0
+  if (quitAt > desktop.startedAt) return
+  if (now - desktop.launchedAt < 20000) return
+  desktop.launchedAt = now
+  // 用 WMI 启动：这样它不是 Claude 的子进程，关掉 Claude 也还在
+  const cmd = `"${exe}" --app --dir "${desktop.dir}"`.replace(/'/g, "''")
+  await $.process.run(
+    ['powershell.exe', '-NoProfile', '-NonInteractive', '-Command', `Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{CommandLine='${cmd}'} | Out-Null`],
+    { timeoutMs: 30000 },
+  )
 }
 
-async function stopDesktop($: EngineInterface) {
-  if (!desktop.running) return
-  try {
-    await writeDesktop($, { quit: true }) // 先请它自己关
-  } catch {
-    // 写不进去也没关系，下面直接结束它
-  }
-  try {
-    void desktop.child?.return(undefined as never)
-  } catch {
-    // 已经关了
-  }
-}
-
-/** 心跳里调用：灵动岛或桌宠有一个要开，就保持小助手活着；都不要就关掉 */
+/** 心跳里调用：写状态、收按钮、看看 app 在不在 */
 async function keepDesktop($: EngineInterface, p: Pet, now: number) {
+  if (!isWindows) return
+  if (desktop.dir === '') desktop.dir = (await $.process.hookEnv()).CLAUDE_PLUGIN_DATA ?? ''
+  if (desktop.dir === '' || !(await holdLease($, now))) return
   const wantIsland = p.prefs.island
   const wantPet = petOnDesktop(p.prefs)
-  const want = isWindows && (wantIsland || wantPet)
-  const data = () => ({ island: wantIsland ? islandData(p) : null, pet: wantPet ? deskData(p, now) : null })
-  if (want && !desktop.running && (desktop.triedAt === 0 || now - desktop.triedAt > desktop.retryMs || !desktop.wanted)) await startDesktop($, data())
-  else if (!want && desktop.running) await stopDesktop($)
-  desktop.wanted = want
-  if (desktop.running) await writeDesktop($, data())
+  // 1. 状态：变了就写；没变也至少每 10 秒写一次（app 靠这个知道 Claude 还开着）
+  if (now > desktop.quitWaitUntil) {
+    const body = JSON.stringify({ island: wantIsland ? islandData(p) : null, pet: wantPet ? deskData(p, now) : null })
+    if (body !== desktop.last || now - desktop.lastWriteAt > 10000) {
+      desktop.last = body
+      desktop.lastWriteAt = now
+      await $.fs.write(`${desktop.dir}\\desktop-state.json`, `{"now":${now},${body.slice(1)}`)
+    }
+  }
+  // 2. app 那边按的按钮
+  await readDesktopActions($)
+  // 3. 每 10 秒看看 app 在不在（灵动岛、桌宠都关掉的话就不叫它）
+  if (now - desktop.checkedAt < 10000 || !(wantIsland || wantPet)) return
+  desktop.checkedAt = now
+  await ensureDesktopApp($, now)
+}
+
+/** /clawd-desktop：在托盘按了"退出"之后，把桌面 Clawd 叫回来 */
+async function bringDesktopBack($: EngineInterface) {
+  const now = await $.clock.now()
+  desktop.startedAt = now
+  desktop.checkedAt = 0
+  desktop.launchedAt = 0
 }
 
 function islandData(p: Pet): Record<string, unknown> {
@@ -1301,6 +1366,7 @@ export const register: Register = on => {
     }
     const now = await $.clock.now()
     isWindows = (await $.session.info()).platform === 'windows'
+    desktop.startedAt = now
     taskBook = await loadTasks($)
     await sync($)
     await update($, pet, p => ({ ...p, lastActive: p.lastActive || now }))
@@ -1311,6 +1377,7 @@ export const register: Register = on => {
     await $.command.register({ name: 'clawd-week', description: '打开 Clawd 周报：本周统计 + 一键生成周报草稿' })
     await $.command.register({ name: 'clawd-settings', description: '弹出 Clawd 设置窗口（Windows）' })
     await $.command.register({ name: 'clawd-pomo', description: '🍅 开始 / 停止番茄钟' })
+    await $.command.register({ name: 'clawd-desktop', description: '🦀 把桌面上的 Clawd（桌宠 + 灵动岛 + 托盘图标）叫出来' })
     await $.command.register({ name: 'clawd-hub', description: '🫧 打开 Clawd 中心（液态玻璃窗口：养成、任务、商店、衣柜、徽章）' })
     void $.ui.open({ id: PANE, title: TITLE })
 
@@ -1428,6 +1495,12 @@ export const register: Register = on => {
     }
     await startPomo($)
     return { text: `🍅 开始专注 ${prefs.pomoMin} 分钟！再输入一次 /clawd-pomo 可以停止` }
+  })
+
+  on('command.run', { command: 'clawd-desktop' }, async $ => {
+    if (!isWindows) return { text: '桌面 Clawd 目前只支持 Windows' }
+    await bringDesktopBack($)
+    return { text: '🦀 桌面 Clawd 马上出来～（右下角托盘图标可以设"开机自动启动"，以后不开 Claude 也在）' }
   })
 
   on('command.run', { command: 'clawd-hub' }, async $ => {

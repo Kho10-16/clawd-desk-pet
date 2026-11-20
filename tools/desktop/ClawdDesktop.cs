@@ -11,9 +11,11 @@
 //   - 不动的时候就睡觉（0 帧）；桌宠上下晃只是"挪窗口"，不重画
 //   - 状态文件有变化时 Windows 会通知（FileSystemWatcher），不用一直去看
 //
-// 用法：clawd-desktop.exe --state <desktop-state.json> [--selftest <截图文件夹>]
-// 状态文件：{ now, quit?, island: {...} | null, pet: {...} | null }
-// 按钮：往 stdout 印 CLAWD_ACTION:{...}，Clawd 会照做
+// 用法：
+//   clawd-desktop.exe --app --dir <插件资料夹>     桌面 app：灵动岛 + 桌宠 + 托盘图标（可以开机自动启动，不靠 Claude）
+//   clawd-desktop.exe --hub --root .. --state .. --data ..   Clawd 中心的柜台
+// 状态文件 desktop-state.json：{ now, quit?, island: {...} | null, pet: {...} | null }（Claude 开着时由 Clawd 写）
+// 按钮：追加到 desktop-actions.txt，Clawd 来拿（见 ActionQueue）；Claude 没开时只做本地的事
 //
 // 注意：要能用 Windows 自带的 csc.exe（C# 5）编译——不要用 $"" 字符串、?.、=> 方法体这些新语法。
 // =====================================================================
@@ -157,7 +159,21 @@ namespace ClawdDesktop {
       p.CloseFigure(); return p;
     }
     static readonly object outLock = new object();
-    public static void Act(string json) { lock (outLock) { Console.Out.WriteLine("CLAWD_ACTION:" + json); Console.Out.Flush(); } }
+    /** Claude 开着吗（Clawd 最近有没有更新状态文件） */
+    public static volatile bool Online = true;
+    /** 托盘那边：先把 Clawd 藏起来（不管 Claude 开没开） */
+    public static volatile bool Hidden = false;
+    /** 弹一个托盘小提示 */
+    public static Action<string> Notify = delegate { };
+    /** app 模式：动作写进文件，Clawd 来拿；没有就印到 stdout */
+    public static ActionQueue Queue;
+    public static void Act(string json) { Act(json, false); }
+    /** quietOffline = Claude 没开时不用提示（例如摸头，本地动画已经做了） */
+    public static void Act(string json, bool quietOffline) {
+      if (!Online) { if (!quietOffline) Notify("Claude 没开：打开 Claude 后才能用这个功能"); return; }
+      if (Queue != null) { Queue.Add(json); return; }
+      lock (outLock) { Console.Out.WriteLine("CLAWD_ACTION:" + json); Console.Out.Flush(); }
+    }
     public static string Str(Dictionary<string, object> d, string k) { object v; return d != null && d.TryGetValue(k, out v) && v != null ? Convert.ToString(v, CultureInfo.InvariantCulture) : ""; }
     public static double Num(Dictionary<string, object> d, string k) { object v; return d != null && d.TryGetValue(k, out v) && v != null ? Convert.ToDouble(v, CultureInfo.InvariantCulture) : 0; }
     public static bool Bool(Dictionary<string, object> d, string k) { object v; return d != null && d.TryGetValue(k, out v) && v is bool && (bool)v; }
@@ -198,17 +214,29 @@ namespace ClawdDesktop {
       Animator.Add(this);
     }
 
-    public void Apply(Dictionary<string, object> s, long now) {
-      bool show = s != null;
+    bool offline;
+    /** Claude 关掉了：岛上改说"休息中"（番茄钟倒计时照样走） */
+    public void SetOffline(bool off) {
       lock (sync) {
-        if (show) {
+        offline = off;
+        if (off) { mood = "idle"; moodLabel = "休息中"; say = "Claude 没开，Clawd 先自己待着"; }
+        dirty = true;
+      }
+      Animator.Wake();
+    }
+
+    public void Apply(Dictionary<string, object> s, long now) {
+      bool show = s != null && !U.Hidden;
+      lock (sync) {
+        if (s != null) {
           bool wasWaiting = mood == "waiting";
           mood = U.Str(s, "mood"); moodLabel = U.Str(s, "moodLabel"); say = U.Str(s, "say");
           lv = (int)U.Num(s, "lv"); kind = U.Str(s, "form") == "baby" ? "baby" : "adult"; task = U.Str(s, "task");
           Dictionary<string, object> p = U.Obj(s, "pomo");
           phase = U.Str(p, "phase"); if (phase == "") phase = "idle";
           endsAt = (long)U.Num(p, "endsAt"); wholeMs = (int)U.Num(p, "wholeMs");
-          skew = now - U.NowMs();
+          skew = 0; // 同一台电脑，时钟一样（Claude 关着时状态文件的时间是旧的，不能拿来算）
+          if (offline) { mood = "idle"; moodLabel = "休息中"; say = "Claude 没开，Clawd 先自己待着"; }
           // Claude 在等你回复：自动展开 6 秒
           if (mood == "waiting" && !wasWaiting) { target = 1; autoCloseAt = DateTime.UtcNow.AddSeconds(6); }
           dirty = true;
@@ -270,7 +298,9 @@ namespace ClawdDesktop {
     }
     string Title() {
       if (mood == "waiting") return "Claude 在等你回复";
+      if (phase == "focus" && LeftMs() == 0) return "番茄完成！";
       if (phase == "focus") return task.Length > 0 ? "专注中 · " + task : "专注中";
+      if (offline && phase == "idle") return "Claude 没开 · Clawd 休息中";
       if (phase == "break") return "休息一下";
       return "Lv." + lv + " · " + moodLabel;
     }
@@ -340,7 +370,8 @@ namespace ClawdDesktop {
           bool ring = phase != "idle";
           float textW = pill.Right - tx - (ring ? U.P(84) : U.P(22));
           Text(g, Title(), fTitle, mood == "waiting" ? Color.FromArgb(a2, Accent()) : Color.FromArgb(a2, 255, 255, 255), new RectangleF(tx, cy - U.P(2), textW, U.P(24)), StringAlignment.Near);
-          Text(g, say, fSay, Color.FromArgb(a2 * 6 / 10, 255, 255, 255), new RectangleF(tx, cy + U.P(22), textW, U.P(20)), StringAlignment.Near);
+          string sub = offline && phase == "focus" && LeftMs() == 0 ? "打开 Claude 就会补发奖励" : say;
+          Text(g, sub, fSay, Color.FromArgb(a2 * 6 / 10, 255, 255, 255), new RectangleF(tx, cy + U.P(22), textW, U.P(20)), StringAlignment.Near);
           if (ring) {
             float d = U.P(56), rx = pill.Right - U.P(22) - d, ry = pill.Y + U.P(16);
             float frac = wholeMs > 0 ? 1f - (float)LeftMs() / wholeMs : 0f;
@@ -433,11 +464,21 @@ namespace ClawdDesktop {
       Animator.Add(this);
     }
 
-    public void Apply(Dictionary<string, object> s) {
-      bool show = s != null;
+    bool offline;
+    /** Claude 关掉了：Clawd 回到发呆，说一句话 */
+    public void SetOffline(bool off) {
       lock (sync) {
-        if (show) {
-          mood = U.Str(s, "mood");
+        offline = off;
+        if (off) { mood = "idle"; say = "Claude 没开，我先自己玩一会儿～"; needBubble = true; bubbleUntil = DateTime.UtcNow.AddSeconds(6); }
+      }
+      Animator.Wake();
+    }
+
+    public void Apply(Dictionary<string, object> s) {
+      bool show = s != null && !U.Hidden;
+      lock (sync) {
+        if (s != null) {
+          mood = offline ? "idle" : U.Str(s, "mood");
           float u = (float)U.Num(s, "unit"); if (u <= 0) u = 8;
           if (u != unit) { unit = u; needSprite = true; if (ax != int.MinValue) Clamp(); }
           tempo = Math.Max(0.3f, (float)U.Num(s, "tempo"));
@@ -449,7 +490,7 @@ namespace ClawdDesktop {
             foreach (string line in sh.Split('\n')) if (line.Length > 0) list.Add(line.Split('|'));
             shapes = list; needSprite = true;
           }
-          string ns = U.Str(s, "say");
+          string ns = offline ? say : U.Str(s, "say");
           if (ns != say) {
             say = ns; needBubble = true;
             if (!first && ns.Length > 0) bubbleUntil = DateTime.UtcNow.AddSeconds(Math.Min(12, 5 + ns.Length / 6.0));
@@ -516,12 +557,12 @@ namespace ClawdDesktop {
         if (dragging) { dragging = false; Clamp(); SavePos(); }
         else { squishAt = DateTime.UtcNow; pat = true; }
       }
-      if (pat) U.Act("{\"type\":\"pat\"}");
+      if (pat) U.Act("{\"type\":\"pat\"}", true);
       Animator.Wake();
     }
     void ShowMenu(Point at) {
       ContextMenuStrip m = new ContextMenuStrip();
-      m.Items.Add("摸摸头", null, delegate { lock (sync) squishAt = DateTime.UtcNow; U.Act("{\"type\":\"pat\"}"); Animator.Wake(); });
+      m.Items.Add("摸摸头", null, delegate { lock (sync) squishAt = DateTime.UtcNow; U.Act("{\"type\":\"pat\"}", true); Animator.Wake(); });
       m.Items.Add("喂小鱼干", null, delegate { U.Act("{\"type\":\"feed\",\"id\":\"fish\"}"); });
       m.Items.Add("番茄钟 开始 / 停止", null, delegate { U.Act("{\"type\":\"pomo-toggle\"}"); });
       m.Items.Add("打开 Clawd 中心", null, delegate { U.Act("{\"type\":\"open\",\"what\":\"hub\"}"); });
@@ -723,7 +764,15 @@ namespace ClawdDesktop {
     readonly FileSystemWatcher watcher;
     readonly System.Threading.Timer debounce, fallback;
     string last = "";
+    Dictionary<string, object> lastData;
     readonly object gate = new object();
+    /** 再套用一次最后的状态（托盘显示 / 隐藏、Claude 回来时）；force = 顺便重新读文件 */
+    public void Reapply() { Reapply(false); }
+    public void Reapply(bool force) {
+      if (force) { lock (gate) last = ""; Read(); return; }
+      Dictionary<string, object> d; lock (gate) d = lastData;
+      if (d != null) onState(d);
+    }
     public StateReader(string path, Action<Dictionary<string, object>> onState) {
       this.path = path; this.onState = onState;
       debounce = new System.Threading.Timer(delegate { Read(); }, null, Timeout.Infinite, Timeout.Infinite);
@@ -748,7 +797,7 @@ namespace ClawdDesktop {
         try { d = new JavaScriptSerializer { MaxJsonLength = 8 * 1024 * 1024 }.DeserializeObject(text) as Dictionary<string, object>; }
         catch { debounce.Change(60, Timeout.Infinite); return; } // 可能刚好写到一半，等一下再读
         if (d == null) return;
-        last = text;
+        last = text; lastData = d;
         onState(d);
       }
     }
@@ -858,14 +907,127 @@ namespace ClawdDesktop {
     }
   }
 
+  // =================================================================== 📮 动作信箱（app 模式）
+  // app 不是 Claude 开的，没办法用 stdout 传话。所以把按钮动作一行一行"追加"到 desktop-actions.txt
+  // （每行：编号<TAB>JSON）。Clawd 读完后把"处理到第几号"写进 desktop-ack.txt，app 看到就把处理过的删掉。
+  class ActionQueue {
+    readonly string file, ackFile;
+    readonly object gate = new object();
+    readonly System.Threading.Timer compact;
+    long lastSeq;
+    static readonly System.Text.UTF8Encoding Utf8 = new System.Text.UTF8Encoding(false);
+    public ActionQueue(string dir) {
+      file = Path.Combine(dir, "desktop-actions.txt");
+      ackFile = Path.Combine(dir, "desktop-ack.txt");
+      compact = new System.Threading.Timer(delegate { Compact(); }, null, 2000, 2000);
+    }
+    public void Add(string json) {
+      lock (gate) {
+        long seq = Math.Max(DateTime.UtcNow.Ticks, lastSeq + 1);
+        lastSeq = seq;
+        try { File.AppendAllText(file, seq + "\t" + json.Replace("\r", " ").Replace("\n", " ") + "\n", Utf8); } catch { }
+      }
+    }
+    void Compact() {
+      lock (gate) {
+        try {
+          if (!File.Exists(file) || !File.Exists(ackFile)) return;
+          long ack; if (!long.TryParse(File.ReadAllText(ackFile).Trim(), out ack)) return;
+          string[] lines = File.ReadAllLines(file, Utf8);
+          List<string> keep = new List<string>();
+          foreach (string l in lines) {
+            int tab = l.IndexOf('\t'); long seq;
+            if (tab > 0 && long.TryParse(l.Substring(0, tab), out seq) && seq > ack) keep.Add(l);
+          }
+          if (keep.Count < lines.Length) File.WriteAllText(file, keep.Count > 0 ? string.Join("\n", keep) + "\n" : "", Utf8);
+        } catch { }
+      }
+    }
+  }
+
+  // =================================================================== 🔔 系统托盘（右下角的小图标）
+  class Tray {
+    readonly NotifyIcon icon = new NotifyIcon();
+    readonly ToolStripMenuItem hideItem, autoItem;
+    readonly string dir;
+    readonly Action reapply;
+    const string RunKey = "Software\\Microsoft\\Windows\\CurrentVersion\\Run";
+
+    public Tray(string dir, Action reapply) {
+      this.dir = dir; this.reapply = reapply;
+      icon.Icon = MakeIcon();
+      icon.Text = "Clawd";
+      ContextMenuStrip m = new ContextMenuStrip();
+      ToolStripMenuItem title = new ToolStripMenuItem("🦀 Clawd"); title.Enabled = false; m.Items.Add(title);
+      hideItem = new ToolStripMenuItem("隐藏 Clawd", null, delegate { ToggleHidden(); });
+      m.Items.Add(hideItem);
+      m.Items.Add("打开 Clawd 中心", null, delegate { U.Act("{\"type\":\"open\",\"what\":\"hub\"}"); });
+      m.Items.Add("番茄钟 开始 / 停止", null, delegate { U.Act("{\"type\":\"pomo-toggle\"}"); });
+      m.Items.Add(new ToolStripSeparator());
+      autoItem = new ToolStripMenuItem("开机自动启动", null, delegate { SetAutostart(!autoItem.Checked); });
+      m.Items.Add(autoItem);
+      m.Items.Add(new ToolStripSeparator());
+      m.Items.Add("退出 Clawd", null, delegate { Quit(); });
+      m.Opening += delegate { autoItem.Checked = AutostartOn(); hideItem.Text = U.Hidden ? "显示 Clawd" : "隐藏 Clawd"; };
+      icon.ContextMenuStrip = m;
+      icon.DoubleClick += delegate { ToggleHidden(); };
+      icon.Visible = true;
+      U.Notify = delegate (string msg) { try { icon.ShowBalloonTip(3000, "Clawd", msg, ToolTipIcon.Info); } catch { } };
+      if (AutostartOn()) SetAutostart(true); // exe 换过版本的话，开机启动也指向新的
+    }
+
+    public void SetOnline(bool online) {
+      try { icon.Text = online ? "Clawd" : "Clawd（Claude 没开）"; } catch { }
+    }
+
+    void ToggleHidden() { U.Hidden = !U.Hidden; reapply(); }
+
+    string Command() { return "\"" + Application.ExecutablePath + "\" --app --dir \"" + dir + "\""; }
+    bool AutostartOn() {
+      try { using (Microsoft.Win32.RegistryKey k = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(RunKey)) return k != null && k.GetValue("Clawd") != null; }
+      catch { return false; }
+    }
+    void SetAutostart(bool on) {
+      try {
+        using (Microsoft.Win32.RegistryKey k = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(RunKey, true)) {
+          if (k == null) return;
+          if (on) k.SetValue("Clawd", Command()); else k.DeleteValue("Clawd", false);
+        }
+      } catch { U.Notify("改开机启动失败了"); }
+    }
+
+    /** 你按了"退出"：记下来，这次 Claude 开着时就不再自动把 Clawd 叫出来 */
+    void Quit() {
+      try { File.WriteAllText(Path.Combine(dir, "desktop-quit.txt"), U.NowMs().ToString()); } catch { }
+      Close();
+      Application.Exit();
+    }
+    public void Close() { icon.Visible = false; icon.Dispose(); }
+
+    static Icon MakeIcon() {
+      string[] sp = { "..XXXXXXXXX..", "..XXXXXXXXX..", "..XXEXXXEXX..", "..XXEXXXEXX..", "LLXXXXXXXXXRR", "..XXXXXXXXX..", "...A.B.A.B...", "...A.B.A.B..." };
+      int size = U.P(32);
+      using (Bitmap b = new Bitmap(size, size, PixelFormat.Format32bppArgb))
+      using (Graphics g = Graphics.FromImage(b)) {
+        g.Clear(Color.Transparent);
+        float cell = size / 13f, oy = (size - 8 * cell) / 2f;
+        using (SolidBrush o = new SolidBrush(Color.FromArgb(217, 119, 87))) using (SolidBrush e = new SolidBrush(Color.FromArgb(20, 20, 20)))
+          for (int r = 0; r < sp.Length; r++)
+            for (int c = 0; c < 13; c++) if (sp[r][c] != '.') g.FillRectangle(sp[r][c] == 'E' ? e : o, c * cell, oy + r * cell, cell + 0.5f, cell + 0.5f);
+        return Icon.FromHandle(b.GetHicon());
+      }
+    }
+  }
+
   // =================================================================== 主程序
   static class Program {
     [STAThread]
     static int Main(string[] args) {
-      string state = "", selftest = "", root = "", data = "", openUrl = "";
+      string dir = "", selftest = "", root = "", data = "", openUrl = "", state = "";
       bool hub = false, noBrowser = false;
       for (int i = 0; i < args.Length; i++) {
         string next = i + 1 < args.Length ? args[i + 1] : "";
+        if (args[i] == "--dir") dir = next;
         if (args[i] == "--state") state = next;
         if (args[i] == "--selftest") selftest = next;
         if (args[i] == "--root") root = next;
@@ -881,35 +1043,62 @@ namespace ClawdDesktop {
         return 0;
       }
       if (hub) return HubServer.Run(root, state, data == "" ? Path.GetTempPath() : data, noBrowser);
-      if (state == "") { Console.Error.WriteLine("usage: clawd-desktop --state <file>"); return 2; }
+
+      // ---------- 桌面 app：灵动岛 + 桌宠 + 托盘图标 ----------
+      if (dir == "" && state != "") dir = Path.GetDirectoryName(state);
+      if (dir == "") { Console.Error.WriteLine("usage: clawd-desktop --app --dir <plugin data folder>"); return 2; }
+      state = Path.Combine(dir, "desktop-state.json");
       try { Native.SetProcessDPIAware(); } catch { }
       using (Graphics g = Graphics.FromHwnd(IntPtr.Zero)) U.S = g.DpiX / 96f;
 
-      // 只能有一个：旧的可能正在关（例如刚 /reload-plugins），最多等 5 秒
-      Mutex mutex = new Mutex(false, "Local\\ClawdDesktop");
+      // 只能有一个：旧的可能正在关（例如换新版本），最多等 5 秒
+      Mutex mutex = new Mutex(false, selftest != "" ? "Local\\ClawdDesktopTest" : "Local\\ClawdDesktop"); // 测试用另一把锁
       bool got;
       try { got = mutex.WaitOne(5000); } catch (AbandonedMutexException) { got = true; }
-      if (!got) { Console.Out.WriteLine("CLAWD_DESKTOP_BUSY"); Console.Out.Flush(); return 0; }
+      if (!got) return 0;
 
       Application.EnableVisualStyles();
       Control ui = new Control(); ui.CreateControl(); // 用来把事情交回界面线程
+      U.Queue = new ActionQueue(dir);
       Island island = new Island();
       Pet pet = new Pet();
-      pet.PosFile = Path.Combine(Path.GetDirectoryName(state), "pet-pos.txt");
+      pet.PosFile = Path.Combine(dir, "pet-pos.txt");
       Animator.Start();
 
+      StateReader reader = null;
       Action<Dictionary<string, object>> apply = delegate (Dictionary<string, object> d) {
         if (U.Bool(d, "quit")) { ui.BeginInvoke((MethodInvoker)delegate { Application.Exit(); }); return; }
         long now = (long)U.Num(d, "now");
         island.Apply(U.Obj(d, "island"), now);
         pet.Apply(U.Obj(d, "pet"));
       };
-      StateReader reader = new StateReader(state, apply);
+      reader = new StateReader(state, apply);
+      Tray tray = new Tray(dir, delegate { reader.Reapply(); });
+
+      // Claude 开着吗：Clawd 至少每 10 秒更新一次状态文件；30 秒没更新 = Claude 没开
+      bool wasOnline = true;
+      System.Windows.Forms.Timer health = new System.Windows.Forms.Timer();
+      health.Interval = 2000;
+      MethodInvoker check = delegate {
+        bool online = File.Exists(state) && (DateTime.UtcNow - File.GetLastWriteTimeUtc(state)).TotalSeconds < 30;
+        U.Online = online;
+        if (online != wasOnline) {
+          wasOnline = online;
+          island.SetOffline(!online); pet.SetOffline(!online); tray.SetOnline(online);
+          if (online) reader.Reapply(true);
+        }
+        // "我还活着"：Clawd 看这个文件知道 app 在不在（pid、exe 路径、时间）
+        try { File.WriteAllText(Path.Combine(dir, "desktop-alive.txt"), System.Diagnostics.Process.GetCurrentProcess().Id + "\t" + Application.ExecutablePath + "\t" + U.NowMs()); } catch { }
+      };
+      check(); // 一开始就先看一次，不用等 2 秒
+      health.Tick += delegate { check(); };
+      health.Start();
       ui.BeginInvoke((MethodInvoker)delegate { reader.Read(); });
 
       if (selftest != "") SelfTest(ui, island, pet, selftest);
-      Console.Out.WriteLine("CLAWD_DESKTOP_READY"); Console.Out.Flush();
       Application.Run();
+      tray.Close();
+      try { File.Delete(Path.Combine(dir, "desktop-alive.txt")); } catch { }
       mutex.ReleaseMutex();
       return 0;
     }
@@ -923,8 +1112,8 @@ namespace ClawdDesktop {
         step++;
         if (step == 1) Shot(island.Bounds, Path.Combine(dir, "island-small.png"));
         if (step == 1) island.SetExpanded(true);
-        if (step == 2) { Shot(island.Bounds, Path.Combine(dir, "island-big.png")); pet.ForceBubble("嗨！拖我去哪里都可以哦"); }
-        if (step == 3) { Rectangle a = pet.Bounds, b = pet.BubbleBounds; Shot(Rectangle.Union(a, b), Path.Combine(dir, "pet.png")); }
+        if (step == 2) { Shot(island.Bounds, Path.Combine(dir, "island-big.png")); pet.ForceBubble("嗨！拖我去哪里都可以哦"); U.Act("{\"type\":\"selftest\"}"); }
+        if (step == 3) { Rectangle a = pet.Bounds, b = pet.BubbleBounds; Shot(b.IsEmpty ? a : Rectangle.Union(a, b), Path.Combine(dir, "pet.png")); }
         if (step >= 4) { t.Stop(); Application.Exit(); }
       };
       t.Start();

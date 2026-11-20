@@ -52,6 +52,7 @@ In the **Claude desktop app** (where `/plugin` does not run): click **+** next t
 | Command | What it does |
 |---|---|
 | `/clawd-hub` | Open the Clawd hub window 打开 Clawd 中心 |
+| `/clawd-desktop` | Bring the desktop Clawd back after quitting it from the tray 把桌面 Clawd 叫回来 |
 | `/pet` | Open Clawd's panel inside Claude: stats, wardrobe, shop, badges 打开养成面板 |
 | `/clawd-settings` | Open the settings window (a native Windows dialog, outside Claude) 弹出设置窗口 |
 | `/clawd-dex` | Open the gallery 打开图鉴 |
@@ -62,6 +63,14 @@ In the **Claude desktop app** (where `/plugin` does not run): click **+** next t
 Panel hotkeys: `p` pat · `f` snack · `w` wake · `d` gallery · `r` weekly report · `s` settings window · `t` pomodoro · `h` Clawd hub
 
 Desktop pet: drag to move · click to pat · double-click for the hub · right-click for a menu (snack, pomodoro, put it back above the chat box).
+
+### Runs like a normal desk pet 像普通桌宠一样运行 (Windows)
+
+The desktop pet and the Dynamic Island live in their own small app with a tray icon (bottom-right, next to the clock), so they stay on your desktop even when Claude is closed:
+
+- Right-click the tray icon: hide / show Clawd, open the hub, start / stop a pomodoro, **开机自动启动 (start with Windows)**, quit
+- With Claude closed, Clawd shows "Claude 没开" and keeps the pomodoro countdown running; rewards for a pomodoro that ended meanwhile are paid when you open Claude again
+- Shop, wardrobe, quests and the hub need Claude to be open
 
 The Dynamic Island starts by itself; turn it off under 专注与打扰 in settings, or right-click it → 隐藏灵动岛.
 
