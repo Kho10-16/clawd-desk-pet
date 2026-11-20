@@ -802,7 +802,7 @@ export function clawdSvg(
 }
 
 /**
- * 🖥 桌面桌宠用：把 clawdSvg() 画好的 SVG 拆成一行一个的形状，桌面窗口（tools/pet.ps1）照着画。
+ * 🖥 桌面桌宠用：把 clawdSvg() 画好的 SVG 拆成一行一个的形状，桌面小助手（tools/desktop/ClawdDesktop.cs）照着画。
  * 就像把一幅十字绣拆成"第几行第几格涂什么颜色"的清单。动画不带过去，桌面那边自己加动作。
  *   r|x|y|w|h|填色|透明度|圆角      c|cx|cy|rx|ry|填色|描边|描边宽|透明度
  *   l|x1|y1|x2|y2|描边|宽          t|x|y|字号|颜色|粗体|文字

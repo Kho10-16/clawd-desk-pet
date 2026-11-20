@@ -77,9 +77,8 @@ The Dynamic Island starts by itself; turn it off under 专注与打扰 in settin
 | `hooks/pomo.ts` | Pomodoro log, task list and stats 番茄日记、任务清单、统计 |
 | `tools/settings.ps1` | The Windows settings window 设置窗口 (Windows) |
 | `tools/settings-mac.js` | The macOS settings window 设置窗口 (macOS) |
-| `tools/hub.ps1` + `tools/hub/index.html` | The Clawd hub: a tiny local server and the Liquid Glass page Clawd 中心 |
-| `tools/island.ps1` | The desktop Dynamic Island 桌面灵动岛 |
-| `tools/pet.ps1` | The draggable desktop pet 桌面桌宠 |
+| `tools/hub/index.html` | The Clawd hub page, served on 127.0.0.1 by the desktop helper (`--hub` mode) Clawd 中心 |
+| `tools/desktop/ClawdDesktop.cs` | One small native helper, compiled once with the C# compiler built into Windows: the Dynamic Island, the desktop pet and the hub server 灵动岛 + 桌宠 + 中心柜台 |
 | `tools/make-sounds.mjs` | Synthesizes the original sound effects — run `node tools/make-sounds.mjs` 合成原创音效 |
 
 ## 📝 Notes

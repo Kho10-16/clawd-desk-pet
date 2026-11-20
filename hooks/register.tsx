@@ -714,9 +714,9 @@ async function patClawd($: EngineInterface) {
 }
 
 // =====================================================================
-// 🫧 Clawd 中心：Claude 外面的一个液态玻璃窗口（tools/hub.ps1 + tools/hub/index.html）
+// 🫧 Clawd 中心：Claude 外面的一个液态玻璃窗口（C# 小助手的 --hub 模式 + tools/hub/index.html）
 //   Clawd → 窗口：把状态写进一个文件（变了才写），窗口每 0.6 秒来读
-//   窗口 → Clawd：按钮被按下 → hub.ps1 印一行 CLAWD_ACTION:{...} → 这里照做
+//   窗口 → Clawd：按钮被按下 → 小助手印一行 CLAWD_ACTION:{...} → 这里照做
 // =====================================================================
 
 let hubOpen = false
@@ -978,8 +978,7 @@ async function hubAction($: EngineInterface, a: HubAction) {
       break
     }
     case 'island-off':
-      await commit($, x => ({ ...x, prefs: { ...x.prefs, island: false } }))
-      await stopOverlay($, island)
+      await commit($, x => ({ ...x, prefs: { ...x.prefs, island: false } })) // 心跳会让灵动岛消失
       $.ui.toast('Clawd：灵动岛藏起来了（设置里可以再打开）')
       break
     case 'pet-where': {
@@ -1014,12 +1013,19 @@ async function openHub($: EngineInterface): Promise<'opened' | 'reopened' | 'uns
   const data = (await $.process.hookEnv()).CLAUDE_PLUGIN_DATA ?? ''
   if (data === '') return 'unsupported'
   const root = $.plugin.root.replace(/\//g, '\\')
-  const script = `${root}\\tools\\hub.ps1`
+  // 柜台和灵动岛 / 桌宠是同一个 C# 小助手（--hub 模式）；以前是 PowerShell（约 73 MB → 约 23 MB）
+  let exe = ''
+  try {
+    exe = await ensureDesktopExe($, data)
+  } catch {
+    exe = ''
+  }
+  if (exe === '') return 'unsupported'
 
   // 柜台还开着（窗口可能被关了或藏在后面）→ 只重新打开窗口
   if (hubOpen) {
     if (hubUrl !== '') {
-      void $.process.run(['powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, '-OpenUrl', hubUrl, '-Data', data]).catch(() => undefined)
+      void $.process.run([exe, '--open-url', hubUrl, '--data', data]).catch(() => undefined)
     }
     return 'reopened'
   }
@@ -1036,7 +1042,7 @@ async function openHub($: EngineInterface): Promise<'opened' | 'reopened' | 'uns
     let buf = ''
     try {
       const child = $.process.spawn({
-        argv: ['powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, '-Root', root, '-State', hubStatePath, '-Data', data],
+        argv: [exe, '--hub', '--root', root, '--state', hubStatePath, '--data', data],
       })
       for await (const piece of child) {
         if (piece.stream !== 'stdout') continue
@@ -1070,56 +1076,109 @@ async function openHub($: EngineInterface): Promise<'opened' | 'reopened' | 'uns
 }
 
 // =====================================================================
-// 🖥 桌面上的小窗口：⚫ 灵动岛（tools/island.ps1）和 🦀 桌面桌宠（tools/pet.ps1）
-//   Clawd → 窗口：一小份状态写进 <名字>-state.json（变了才写；{quit:true} = 请它自己关）
+// 🖥 桌面上的小窗口：⚫ 灵动岛 和 🦀 桌面桌宠（一个 C# 小助手：tools/desktop/ClawdDesktop.cs）
+//   Clawd → 小助手：一小份状态写进 desktop-state.json（{island, pet}，变了才写；{quit:true} = 请它自己关）
 //   窗口 → Clawd：按钮印 CLAWD_ACTION:{...}，和 Clawd 中心用同一个 hubAction()
-//   好几个聊天同时开着：窗口那边有一把锁，只有第一个能开；其他的每 2 分钟再试一次
+//   好几个聊天同时开着：小助手有一把锁，只有一个；其他聊天 15 秒后再看看（刚 reload 时旧的会让位）
 // =====================================================================
 
-type Overlay = {
-  name: string
-  script: string
-  running: boolean
-  path: string
-  last: string
-  triedAt: number
-  wanted: boolean
-  child: ReturnType<EngineInterface['process']['spawn']> | null
-}
-const newOverlay = (name: string, script: string): Overlay => ({
-  name, script, running: false, path: '', last: '', triedAt: 0, wanted: false, child: null,
-})
-const island = newOverlay('island', 'island.ps1')
-const desk = newOverlay('pet', 'pet.ps1')
 let isWindows = false
 
-/** 内容变了才写文件（now 不算在"有没有变"里面） */
-async function writeOverlay($: EngineInterface, o: Overlay, data: Record<string, unknown>) {
-  if (o.path === '') return
-  const body = JSON.stringify(data)
-  if (body === o.last) return
-  o.last = body
-  await $.fs.write(o.path, `{"now":${await $.clock.now()},${body.slice(1)}`)
+/**
+ * 桌面小助手：一个 C# 小程序（tools/desktop/ClawdDesktop.cs）同时管灵动岛和桌宠。
+ * 第一次用时用 Windows 自带的 csc.exe 编译成 exe，放在插件资料夹；源代码变了才重新编译。
+ */
+const desktop = {
+  running: false,
+  path: '',
+  last: '',
+  triedAt: 0,
+  retryMs: 120000, // 没开成的话，多久再试（被别的聊天占着时缩短成 15 秒）
+  wanted: false,
+  exe: '',
+  child: null as ReturnType<EngineInterface['process']['spawn']> | null,
 }
 
-async function startOverlay($: EngineInterface, o: Overlay, first: Record<string, unknown>) {
-  if (o.running) return
-  o.triedAt = await $.clock.now()
+/** 简单的指纹：源代码一变，exe 名字就变，所以会重新编译 */
+function fingerprint(text: string): string {
+  let h = 0x811c9dc5
+  for (let k = 0; k < text.length; k++) {
+    h ^= text.charCodeAt(k)
+    h = Math.imul(h, 0x01000193) >>> 0
+  }
+  return h.toString(16).padStart(8, '0')
+}
+
+/** 找到（或编译出）小助手 exe。失败返回 '' */
+let compiling: Promise<string> | null = null
+/** 同一时间只编译一次：Clawd 中心和灵动岛同时要的话，第二个等第一个编完 */
+function ensureDesktopExe($: EngineInterface, data: string): Promise<string> {
+  if (!compiling) {
+    compiling = buildDesktopExe($, data).finally(() => {
+      compiling = null
+    })
+  }
+  return compiling
+}
+
+async function buildDesktopExe($: EngineInterface, data: string): Promise<string> {
+  const root = $.plugin.root.replace(/\//g, '\\')
+  const src = `${root}\\tools\\desktop\\ClawdDesktop.cs`
+  const exe = `${data}\\clawd-desktop-${fingerprint(await $.fs.read(src))}.exe`
+  if (desktop.exe === exe || (await $.fs.exists(exe))) return exe
+  // 找 Windows 自带的 C# 编译器（.NET Framework 4.x，每台 Windows 10/11 都有）
+  const winDir = (await $.process.run(['cmd.exe', '/d', '/c', 'echo %SystemRoot%'])).stdout.trim() || 'C:\\Windows'
+  let csc = ''
+  for (const fw of ['Framework64', 'Framework']) {
+    const p = `${winDir}\\Microsoft.NET\\${fw}\\v4.0.30319\\csc.exe`
+    if (await $.fs.exists(p)) {
+      csc = p
+      break
+    }
+  }
+  if (csc === '') return ''
+  const r = await $.process.run(
+    [csc, '/nologo', '/target:winexe', '/optimize+', `/out:${exe}`, '/r:System.Windows.Forms.dll', '/r:System.Drawing.dll', '/r:System.Web.Extensions.dll', src],
+    { timeoutMs: 120000 },
+  )
+  return r.exitCode === 0 && (await $.fs.exists(exe)) ? exe : ''
+}
+
+/** 内容变了才写文件（now 不算在"有没有变"里面） */
+async function writeDesktop($: EngineInterface, data: Record<string, unknown>) {
+  if (desktop.path === '') return
+  const body = JSON.stringify(data)
+  if (body === desktop.last) return
+  desktop.last = body
+  await $.fs.write(desktop.path, `{"now":${await $.clock.now()},${body.slice(1)}`)
+}
+
+async function startDesktop($: EngineInterface, first: Record<string, unknown>) {
+  if (desktop.running) return
+  desktop.triedAt = await $.clock.now()
+  desktop.retryMs = 120000
   if (!isWindows) return
   const data = (await $.process.hookEnv()).CLAUDE_PLUGIN_DATA ?? ''
   if (data === '') return
-  o.path = `${data}${data.includes('\\') ? '\\' : '/'}${o.name}-state.json`
-  o.last = ''
-  o.running = true
-  await writeOverlay($, o, first)
-  const root = $.plugin.root.replace(/\//g, '\\')
+  desktop.running = true
+  try {
+    desktop.exe = await ensureDesktopExe($, data)
+  } catch {
+    desktop.exe = ''
+  }
+  if (desktop.exe === '') {
+    desktop.running = false
+    $.ui.toast('Clawd：桌面小助手编译失败，灵动岛和桌宠暂时出不来')
+    return
+  }
+  desktop.path = `${data}\\desktop-state.json`
+  desktop.last = ''
+  await writeDesktop($, first)
   void (async () => {
     let buf = ''
     try {
-      const child = $.process.spawn({
-        argv: ['powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-STA', '-File', `${root}\\tools\\${o.script}`, '-State', o.path],
-      })
-      o.child = child
+      const child = $.process.spawn({ argv: [desktop.exe, '--state', desktop.path] })
+      desktop.child = child
       for await (const piece of child) {
         if (piece.stream !== 'stdout') continue
         buf += piece.text
@@ -1127,7 +1186,7 @@ async function startOverlay($: EngineInterface, o: Overlay, first: Record<string
         while (nl >= 0) {
           const line = buf.slice(0, nl).trim()
           buf = buf.slice(nl + 1)
-          if (line.endsWith('_BUSY')) break // 别的聊天已经开了一个
+          if (line === 'CLAWD_DESKTOP_BUSY') desktop.retryMs = 15000 // 别的聊天开着一个：15 秒后再看看
           if (line.startsWith('CLAWD_ACTION:')) {
             try {
               await hubAction($, JSON.parse(line.slice('CLAWD_ACTION:'.length)) as HubAction)
@@ -1139,34 +1198,38 @@ async function startOverlay($: EngineInterface, o: Overlay, first: Record<string
         }
       }
     } catch {
-      // 窗口关掉了 / 没开成：心跳过一阵会再试
+      // 小助手关掉了 / 没开成：心跳过一阵会再试
     } finally {
-      o.running = false
-      o.child = null
+      desktop.running = false
+      desktop.child = null
     }
   })()
 }
 
-async function stopOverlay($: EngineInterface, o: Overlay) {
-  if (!o.running) return
+async function stopDesktop($: EngineInterface) {
+  if (!desktop.running) return
   try {
-    await writeOverlay($, o, { quit: true }) // 先请它自己关
+    await writeDesktop($, { quit: true }) // 先请它自己关
   } catch {
     // 写不进去也没关系，下面直接结束它
   }
   try {
-    void o.child?.return(undefined as never)
+    void desktop.child?.return(undefined as never)
   } catch {
     // 已经关了
   }
 }
 
-/** 心跳里调用：设置说要开就保持它活着，说不要就关掉 */
-async function keepOverlay($: EngineInterface, o: Overlay, want: boolean, now: number, data: () => Record<string, unknown>) {
-  if (want && !o.running && (o.triedAt === 0 || now - o.triedAt > 120000 || !o.wanted)) await startOverlay($, o, data())
-  else if (!want && o.running) await stopOverlay($, o)
-  o.wanted = want
-  if (o.running) await writeOverlay($, o, data())
+/** 心跳里调用：灵动岛或桌宠有一个要开，就保持小助手活着；都不要就关掉 */
+async function keepDesktop($: EngineInterface, p: Pet, now: number) {
+  const wantIsland = p.prefs.island
+  const wantPet = petOnDesktop(p.prefs)
+  const want = isWindows && (wantIsland || wantPet)
+  const data = () => ({ island: wantIsland ? islandData(p) : null, pet: wantPet ? deskData(p, now) : null })
+  if (want && !desktop.running && (desktop.triedAt === 0 || now - desktop.triedAt > desktop.retryMs || !desktop.wanted)) await startDesktop($, data())
+  else if (!want && desktop.running) await stopDesktop($)
+  desktop.wanted = want
+  if (desktop.running) await writeDesktop($, data())
 }
 
 function islandData(p: Pet): Record<string, unknown> {
@@ -1340,8 +1403,7 @@ export const register: Register = on => {
 
       // ⚫ 灵动岛 / 🦀 桌面桌宠：设置开着就保持它们活着（别的聊天开了的话，2 分钟后再试）；关了就收起来
       const q = await read($, pet)
-      await keepOverlay($, island, q.prefs.island, t, () => islandData(q))
-      await keepOverlay($, desk, petOnDesktop(q.prefs), t, () => deskData(q, t))
+      await keepDesktop($, q, t)
     })
 
     return next(e)
